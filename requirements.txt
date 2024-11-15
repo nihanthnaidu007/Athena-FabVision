@@ -1,0 +1,28 @@
+# Core dependencies for Django
+django>=4.0,<5.0  # Django framework
+djangorestframework>=3.14.0  # REST framework for APIs
+gunicorn>=20.1.0  # WSGI HTTP server for production
+
+# LiveKit and Agent-related dependencies
+livekit-agents>=1.0.0  # Core LiveKit agent library
+livekit-plugins-openai>=1.0.0  # LiveKit plugin for OpenAI integration
+livekit-plugins-silero>=1.0.0  # LiveKit plugin for Silero voice processing
+python-dotenv>=1.0.0  # To manage environment variables
+
+# Optional utilities
+requests>=2.31.0  # For making HTTP requests
+loguru>=0.7.0  # For advanced logging
+
+# Frontend-related dependencies
+whitenoise>=6.4.0  # For serving static files in production
+
+# Database
+psycopg2>=2.9.7  # PostgreSQL adapter (if using PostgreSQL in production)
+
+# Development and testing tools
+autopep8>=2.0.0  # For automatic code formatting
+pytest>=7.4.0  # For testing
+
+# Voice activity detection and processing
+silero>=0.2.0  # For Silero-based voice activity detection
+torch>=1.9.0  # Required for Silero models

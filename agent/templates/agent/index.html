@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #555;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin: 20px 0;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            resize: none;
+        }
+        button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            color: #fff;
+            background: #007bff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .response {
+            margin-top: 20px;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Talk to the AI Agent</h1>
+        <textarea id="userQuery" placeholder="Type your question here..."></textarea>
+        <button id="askButton">Ask the Agent</button>
+        <div class="response" id="responseContainer"></div>
+    </div>
+    <script>
+        document.getElementById('askButton').addEventListener('click', async () => {
+            const query = document.getElementById('userQuery').value;
+            if (!query) {
+                alert('Please enter a query!');
+                return;
+            }
+
+            const responseContainer = document.getElementById('responseContainer');
+            responseContainer.textContent = 'Thinking...';
+
+            try {
+                const response = await fetch('/agent/ask/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query }),
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    responseContainer.textContent = data.response;
+                } else {
+                    responseContainer.textContent = data.error || 'An error occurred.';
+                }
+            } catch (error) {
+                responseContainer.textContent = 'Error: Could not connect to the server.';
+            }
+        });
+    </script>
+</body>
+</html>
