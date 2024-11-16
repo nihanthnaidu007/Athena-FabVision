@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 import os
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,19 +22,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'REDACTED'
+SECRET_KEY = config('SECRET_KEY', default='unsafe-secret-key')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = config('DEBUG', cast=bool, default=True)
 
 # This is for testing purpose. not suggested during production
 ALLOWED_HOSTS = ['*']
+
+#ALLOWED_HOSTS = config('ALLOWED_HOSTS', cast=lambda v: v.split(','), default='localhost,127.0.0.1')
 
 #ALLOWED_HOSTS = [
 #    'localhost',
 #   '127.0.0.1',
 #    'athena-ai-agent.onrender.com',
 #]
+
+#API's
+
+OPENAI_API_KEY = config('OPENAI_API_KEY')
+LIVEKIT_URL = config('LIVEKIT_URL')
+LIVEKIT_API_KEY = config('LIVEKIT_API_KEY')
+LIVEKIT_API_SECRET = config('LIVEKIT_API_SECRET')
+GOOGLE_API_KEY = config('GOOGLE_API_KEY')
+GOOGLE_SEARCH_ENGINE_ID = config('GOOGLE_SEARCH_ENGINE_ID')
 
 
 # Application definition
