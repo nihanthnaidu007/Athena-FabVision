@@ -1,5 +1,6 @@
 """API-keys page tests: auth, isolation, and the full create -> use -> revoke lifecycle."""
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -16,12 +17,12 @@ class KeysPageAuthTests(TestCase):
     def test_anonymous_list_get_redirects_to_login(self):
         response = self.client.get(reverse('dashboard:keys'))
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response['Location'].startswith('/accounts/login/'))
+        self.assertTrue(response['Location'].startswith(settings.LOGIN_URL))
 
     def test_anonymous_revoke_post_redirects_to_login(self):
         response = self.client.post(reverse('dashboard:revoke-key', args=[1]))
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response['Location'].startswith('/accounts/login/'))
+        self.assertTrue(response['Location'].startswith(settings.LOGIN_URL))
 
 
 class KeysPageTests(TestCase):

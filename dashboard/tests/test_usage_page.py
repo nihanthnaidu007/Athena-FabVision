@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -30,7 +31,16 @@ class UsagePageAuthTests(TestCase):
     def test_anonymous_get_redirects_to_login(self):
         response = self.client.get(reverse('dashboard:usage'))
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(response['Location'].startswith('/accounts/login/'))
+        self.assertTrue(response['Location'].startswith(settings.LOGIN_URL))
+
+    def test_login_redirect_target_serves_a_login_page(self):
+        # Regression: settings.LOGIN_URL must name a mounted route.
+        # Django's implicit '/accounts/login/' default has no view in
+        # this project, so login_required would strand anonymous users
+        # on a 404.
+        response = self.client.get(reverse('dashboard:usage'), follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Log in')
 
 
 class UsagePageTests(TestCase):

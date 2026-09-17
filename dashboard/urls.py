@@ -10,7 +10,8 @@ urlpatterns = [
     path('keys/', views.keys_view, name='keys'),
     path('keys/<int:key_id>/revoke/', views.revoke_key, name='revoke-key'),
     # Login/logout for the dashboard's login_required pages; the default
-    # LOGIN_URL (/accounts/login/) resolves here.
+    # Auth flow for the login_required pages: settings.LOGIN_URL
+    # defaults to /dashboard/accounts/login/ (this mount).
     path('accounts/login/', auth_views.LoginView.as_view(), name='login'),
     path('accounts/logout/', auth_views.LogoutView.as_view(), name='logout'),
 ]

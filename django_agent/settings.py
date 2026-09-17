@@ -145,6 +145,11 @@ REST_FRAMEWORK = {
     },
 }
 
+# Login route for @login_required pages (the dashboard app serves it
+# under /dashboard/accounts/). Must name a mounted route: Django's
+# implicit '/accounts/login/' default has no view here and would 404.
+LOGIN_URL = optional_var('DJANGO_LOGIN_URL', default='/dashboard/accounts/login/')
+
 # Internationalization
 
 LANGUAGE_CODE = 'en-us'
