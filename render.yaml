@@ -1,0 +1,39 @@
+# Single-container deploy manifest (Render web service, Docker runtime).
+# Render builds the repo Dockerfile and probes healthCheckPath before
+# marking the service live.
+#
+# Data note: the app currently runs on the SQLite fallback defined in
+# django_agent/settings.py, which is ephemeral across redeploys on any
+# hosted container. When the data layer moves to Postgres via DATABASE_URL
+# (spec Layer 1), wire the database URL here as a synced secret.
+services:
+  - type: web
+    name: athena-fabvision
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz/ready/
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DJANGO_DEBUG
+        value: 'false'
+      - key: DJANGO_ALLOWED_HOSTS
+        value: 'athena-fabvision.onrender.com'
+      # W008 disposition: TLS terminates at Render's edge proxy, so the
+      # in-app redirect stays off (see django_agent/settings.py).
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: 'false'
+      # Optional integrations -- the app boots degraded-but-alive with
+      # none of these set; each enables its feature when present.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GOOGLE_SEARCH_ENGINE_ID
+        sync: false

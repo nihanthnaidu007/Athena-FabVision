@@ -57,6 +57,9 @@ MIDDLEWARE = [
     'django_agent.middleware.RequestIdMiddleware',
     'django_agent.middleware.JsonErrorContractMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serves collected static files from inside the single-container image
+    # (safe with DEBUG=False; collectstatic runs at image build time).
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

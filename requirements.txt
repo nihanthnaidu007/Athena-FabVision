@@ -81,3 +81,7 @@ types-protobuf==4.25.0.20240417
 typing_extensions==4.12.2
 watchfiles==0.24.0
 yarl==1.17.1
+
+# --- Single-container deploy (Dockerfile) ------------------------------------
+# Serves collected static files from inside the container (DEBUG=False safe).
+whitenoise>=6.7.0
