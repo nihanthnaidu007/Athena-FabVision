@@ -127,6 +127,18 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'EXCEPTION_HANDLER': 'assistant.exceptions.json_exception_handler',
+    # Scoped throttles: session users get the 'user' rate; API-key requests
+    # get the rate of their key's tier. Throttled requests answer 429 with
+    # Retry-After through the JSON error contract.
+    'DEFAULT_THROTTLE_CLASSES': [
+        'assistant.throttling.UserRateThrottle',
+        'assistant.throttling.ApiKeyTierThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '120/hour',
+        'api_key_standard': '120/hour',
+        'api_key_high': '600/hour',
+    },
 }
 
 # Internationalization
