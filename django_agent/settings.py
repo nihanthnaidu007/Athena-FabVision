@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'agent',
+    'assistant',
 ]
 
 MIDDLEWARE = [
@@ -111,6 +112,22 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Django REST Framework: every API route requires authentication (session
+# for the web app, hashed API keys for programmatic access), and every
+# DRF-produced error answers through the JSON error contract.
+REST_FRAMEWORK = {
+    # ApiKeyAuthentication must stay first: DRF derives 401 semantics
+    # (authenticate_header) from the first class in this list.
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'assistant.authentication.ApiKeyAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'EXCEPTION_HANDLER': 'assistant.exceptions.json_exception_handler',
+}
 
 # Internationalization
 
