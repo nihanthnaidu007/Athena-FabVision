@@ -35,6 +35,9 @@ OPENAI_CHAT_MODEL = optional_var('OPENAI_CHAT_MODEL', default='gpt-4o-mini')
 LIVEKIT_URL = optional_var('LIVEKIT_URL')
 LIVEKIT_API_KEY = optional_var('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = optional_var('LIVEKIT_API_SECRET')
+# Voice-token lifetime in seconds; the voice surface only exists when all
+# three LIVEKIT_* settings above are configured.
+LIVEKIT_TOKEN_TTL = int_var('LIVEKIT_TOKEN_TTL', default=3600)
 GOOGLE_API_KEY = optional_var('GOOGLE_API_KEY')
 GOOGLE_SEARCH_ENGINE_ID = optional_var('GOOGLE_SEARCH_ENGINE_ID')
 
@@ -51,6 +54,9 @@ INSTALLED_APPS = [
     'agent',
     'assistant',
     'dashboard',
+    # Feature-flagged voice surface (LiveKit): harmless (and invisible)
+    # without LIVEKIT_URL/API_KEY/SECRET configured.
+    'voice',
 ]
 
 MIDDLEWARE = [
@@ -143,6 +149,8 @@ REST_FRAMEWORK = {
         'user': '120/hour',
         'api_key_standard': '120/hour',
         'api_key_high': '600/hour',
+        # Token minting is an expensive, loud operation: tighter than chat.
+        'voice_token': '30/hour',
     },
 }
 

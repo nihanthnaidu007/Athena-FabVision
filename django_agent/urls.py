@@ -15,6 +15,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('agent/', include('agent.urls')),
     path('dashboard/', include('dashboard.urls')),
+    # Voice surface (feature-flagged): the page renders both states, the
+    # token endpoint answers the JSON error contract when unconfigured.
+    path('voice/', include('voice.urls')),
     # Knowledge-base upload API (rag package); consumers gate on import.
     path('kb/', include('rag.urls')),
     # Health: liveness is process-only; readiness probes the database and

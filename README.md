@@ -20,28 +20,20 @@ Athena provides:
   - REST endpoint at `/agent/ask/` that accepts JSON `{ "query": "..." }` and returns JSON `{ "response": "..." }`
   - Simple pluggable logic in `agent_logic.py` (e.g., telling jokes, basic canned responses)
 
-- **Real-time voice assistant**
-  - LiveKit worker defined in `main.py`
+- **Real-time voice assistant (feature-flagged)**
+  - LiveKit agent worker in `voice/agent.py` + `voice/worker.py` (livekit-agents 1.x: `Agent` + `AgentSession` + `@function_tool`)
+  - Reuses the shared agent core (`agent/loop.py`, `agent/registry.py`) for tools and retrieval — voice does not reimplement agent logic
   - Uses:
     - Silero VAD for voice activity detection
     - OpenAI for:
       - Speech-to-Text (STT)
       - LLM reasoning
       - Text-to-Speech (TTS)
-  - Guided by a rich domain-specific prompt in `instructions.txt` focused on semiconductor and chip design
-  - Can:
-    - Answer time/date questions
-    - Tell jokes
-    - Provide domain-specific insights
-    - Perform web searches and summarize top results
+  - Guided by a domain-specific system prompt (`instructions.txt`, reused by the shared core) focused on semiconductor and chip design
+  - Only exists when `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` are configured; otherwise the UI shows a disabled voice entry and everything else is unaffected
 
-- **Assistant tools**
-  - Defined in `api.py` as methods on an `AssistantFnc` function context:
-    - `tell_joke()`
-    - `provide_insight(topic)`
-    - `get_current_datetime()`
-    - `search_web(query)` (Google Custom Search API)
-  - Exposed to the LLM through LiveKit’s tools/function-calling interface
+- **Voice access control**
+  - `POST /voice/token/` (auth required: session or API key, throttled) mints a LiveKit token scoped to the requesting user's own room
 
 ---
 
@@ -78,11 +70,8 @@ High-level structure:
 - `manage.py`  
   Django management script (migrations, dev server, tests).
 
-- `main.py`  
-  Entry point for the LiveKit-based voice assistant worker.
-
-- `api.py`  
-  Assistant function context, exposing tools (jokes, insights, datetime, web search).
+- `voice/`  
+  Feature-flagged voice surface: LiveKit token minting (`voice/minting.py`), the 1.x voice agent wired to the shared core (`voice/agent.py`), and the standalone worker process (`voice/worker.py`).
 
 - `instructions.txt`  
   Domain-specific system prompt for the voice assistant (semiconductor and chip design focus).
@@ -216,32 +205,31 @@ python manage.py runserver
 
 ## Running the LiveKit Voice Assistant
 
-In a separate terminal (with the same virtualenv and `.env`):
+The voice worker is a separate process and never blocks the web service. It
+requires `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` (plus
+`OPENAI_API_KEY` for the speech plugins and reasoning):
 
 ```bash
-python main.py
+python -m voice.worker
 ```
 
 This will:
 
-- Load environment variables
-- Connect to your LiveKit server (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`)
+- Connect to your LiveKit server and listen for new voice rooms
 - Initialize:
-  - Silero VAD
+  - Silero VAD (once per worker process)
   - OpenAI STT/LLM/TTS via LiveKit’s OpenAI plugins
-- Load system instructions from `instructions.txt`
-- Run a `VoiceAssistant` loop that:
-  - Listens for audio in the configured room
-  - Transcribes user speech
-  - Uses the LLM plus tools from `api.py` to decide how to respond
-  - Sends synthesized speech back to the user
+- Run the 1.x `AthenaVoiceAgent`, which routes questions through the shared
+  agent core (knowledge-base retrieval, fab tools, web search)
+- Resume gracefully across LiveKit signal reconnects
 
 You typically run **both**:
 
 - Django app: `python manage.py runserver`
-- Voice assistant worker: `python main.py`
+- Voice assistant worker: `python -m voice.worker`
 
-at the same time in development.
+at the same time in development. Without LiveKit configured, skip the worker:
+the web app hides the voice surface entirely.
 
 ---
 
@@ -278,12 +266,10 @@ Production steps (high-level):
 
 ### Running the voice worker in production
 
-The LiveKit worker (`main.py`) is not part of the Procfile by default.  
-You should run it as a separate long-lived process, for example:
-
-```bash
-python main.py
-```
+The Procfile includes a `voice` entry (`python -m voice.worker`); run it as a
+separate long-lived process wherever you run `web`. It is only meaningful
+when the LIVEKIT variables are configured — without them the web app simply
+hides the voice surface.
 
 Use your hosting platform or process manager (systemd, supervisor, etc.) to keep it running.
 
@@ -304,7 +290,7 @@ python manage.py test
 
 - Replace the placeholder text logic in `agent_logic.py` with a real LLM-powered backend.
 - Add authentication and user-specific context to queries.
-- Extend `AssistantFnc` in `api.py` with more specialized tools (e.g., analytics, data retrieval, dashboards).
+- Extend the voice agent’s function tools in `voice/agent.py` (e.g., analytics, data retrieval, dashboards).
 - Add proper CI tests and coverage.
 - Improve the `/agent/` UI with more polished frontend components.
 
