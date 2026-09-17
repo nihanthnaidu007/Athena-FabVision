@@ -41,6 +41,7 @@ python -c "import secrets; print(secrets.token_urlsafe(64))"
 
 python manage.py migrate
 python manage.py createsuperuser
+python manage.py collectstatic --noinput
 python manage.py runserver
 ```
 
