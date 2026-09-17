@@ -1,0 +1,6 @@
+# Obvious repository policy — auto-detected from GitHub repo settings
+branches:
+  default: main
+merge:
+  method: merge            # GitHub default; squash and rebase are also enabled
+  deleteBranchOnMerge: false
