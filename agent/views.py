@@ -8,6 +8,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 from rest_framework import exceptions
+from rest_framework.negotiation import DefaultContentNegotiation
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -58,6 +60,21 @@ async def agent_sse_stream(**kwargs):
         yield f'event: {event.type}\ndata: {payload}\n\n'.encode()
 
 
+class EventStreamNegotiation(DefaultContentNegotiation):
+    """Accept the stream's own media type instead of the renderer dance.
+
+    The default negotiation 406s any ``Accept`` it cannot match to a
+    renderer -- including ``text/event-stream``, which this endpoint
+    exists to produce (EventSource and curl send it by default). Parser
+    selection stays default so request bodies keep negotiating normally;
+    error responses render through JSONRenderer, keeping the JSON error
+    contract.
+    """
+
+    def select_renderer(self, request, renderers, format_suffix):
+        return renderers[0], renderers[0].format
+
+
 class AgentStreamView(APIView):
     """POST /agent/stream/ -- one agent turn as a Server-Sent Events stream.
 
@@ -74,6 +91,9 @@ class AgentStreamView(APIView):
     tool_call, tool_result, sources, done, and error events; failures
     inside the turn are error events, never a broken stream.
     """
+
+    renderer_classes = [JSONRenderer]
+    content_negotiation_class = EventStreamNegotiation
 
     def post(self, request):
         user_input = str(request.data.get('message') or request.data.get('query') or '').strip()

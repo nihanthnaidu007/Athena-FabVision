@@ -110,6 +110,32 @@ def test_stream_headers_on_unconsumed_response(db, user, monkeypatch):
     assert response["Cache-Control"] == "no-cache"
 
 
+def test_event_stream_accept_header_is_not_406(transactional_db, user, monkeypatch):
+    """Clients that ask for text/event-stream (EventSource, curl, chat.js)
+    must get the stream. DRF's default negotiation rejected exactly that
+    Accept header with 406 -- the endpoint's own media type."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        response = await client.post(
+            SSE_URL,
+            data={"message": "hi"},
+            headers={"Accept": "text/event-stream"},
+        )
+        body = b"".join([chunk async for chunk in response.streaming_content])
+        return response, body
+
+    response, body = asyncio.run(_scenario())
+    types = [event_type for event_type, _ in parse_sse(body)]
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "text/event-stream"
+    assert types[0] == "status"
+    assert types[-1] == "done"
+
+
 def test_full_turn_over_sse_records_usage_and_persists(transactional_db, user, monkeypatch):
     monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
     api_key, raw = ApiKey.generate(name="k", created_by=user)
