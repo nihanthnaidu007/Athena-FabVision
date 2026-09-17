@@ -1,8 +1,9 @@
-import random
-import logging
 import datetime
-import requests
+import logging
 import os
+import random
+
+import requests
 from dotenv import load_dotenv
 from livekit.agents import llm
 
@@ -33,12 +34,19 @@ class AssistantFnc(llm.FunctionContext):
     def provide_insight(self, topic: str) -> str:
         """Provide insight or knowledge based on the topic."""
         insights = {
-            "semiconductors": "Semiconductors are the backbone of modern electronics, enabling the miniaturization of circuits.",
-            "AI": "Artificial intelligence is transforming industries by making systems more adaptive, efficient, and insightful.",
-            "optimization": "Optimization in manufacturing reduces waste, improves efficiency, and maximizes yield, crucial in high-stakes semiconductor production.",
-            "manufacturing": "In semiconductor manufacturing, precision and process control are key to ensuring high yield and minimal defects."
+            "semiconductors": "Semiconductors are the backbone of modern electronics, "
+            "enabling the miniaturization of circuits.",
+            "AI": "Artificial intelligence is transforming industries by making "
+            "systems more adaptive, efficient, and insightful.",
+            "optimization": "Optimization in manufacturing reduces waste, improves "
+            "efficiency, and maximizes yield, crucial in high-stakes semiconductor production.",
+            "manufacturing": "In semiconductor manufacturing, precision and process "
+            "control are key to ensuring high yield and minimal defects."
         }
-        insight = insights.get(topic.lower(), "I'm always here to provide insights on semiconductors, AI, and optimization!")
+        insight = insights.get(
+            topic.lower(),
+            "I'm always here to provide insights on semiconductors, AI, and optimization!",
+        )
         logger.info("Providing insight on topic '%s': %s", topic, insight)
         return insight
 
@@ -50,11 +58,13 @@ class AssistantFnc(llm.FunctionContext):
         logger.info("Providing current date and time: %s", formatted_time)
         return f"The current date and time is: {formatted_time}"
 
-    @llm.ai_callable(description="Search the web for a query when information is not in the knowledge base.")
+    @llm.ai_callable(
+        description="Search the web for a query when information is not in the knowledge base."
+    )
     def search_web(self, query: str) -> str:
         """Search the web for information if not available in knowledge base."""
         logger.info("Searching web for query: %s", query)
-        
+
         # Load API credentials from environment variables
         api_key = os.getenv("GOOGLE_API_KEY")
         search_engine_id = os.getenv("GOOGLE_SEARCH_ENGINE_ID")
@@ -78,11 +88,14 @@ class AssistantFnc(llm.FunctionContext):
                 # Handle specific error responses from the API
                 error_message = data["error"].get("message", "An unknown error occurred.")
                 logger.error("API error message: %s", error_message)
-                return f"I'm currently unable to access the latest information due to an API issue: {error_message}"
+                return (
+                    f"I'm currently unable to access the latest information due to "
+                    f"an API issue: {error_message}"
+                )
             else:
                 logger.info("No results found for query: %s", query)
                 return "I'm sorry, I couldn't find any information on that topic."
-        
+
         except requests.RequestException as e:
             logger.error("Error during web search request: %s", e)
             return "I encountered a network error while searching the web. Please try again later."
