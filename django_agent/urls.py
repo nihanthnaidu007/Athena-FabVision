@@ -15,6 +15,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('agent/', include('agent.urls')),
     path('dashboard/', include('dashboard.urls')),
+    # Knowledge-base upload API (rag package); consumers gate on import.
+    path('kb/', include('rag.urls')),
     # Health: liveness is process-only; readiness probes the database and
     # reports optional-integration availability. Unauthenticated by design.
     path('healthz/', health.liveness, name='liveness'),

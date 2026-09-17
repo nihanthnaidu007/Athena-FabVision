@@ -161,6 +161,18 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# --- Knowledge-base uploads (rag) --------------------------------------------
+# Cap accepted document size. The request-body limit sits slightly above the
+# app cap so the rag upload view (not Django's body guard) answers oversize
+# requests with the JSON error contract.
+RAG_MAX_UPLOAD_BYTES = int_var('RAG_MAX_UPLOAD_BYTES', default=10 * 1024 * 1024)
+DATA_UPLOAD_MAX_MEMORY_SIZE = RAG_MAX_UPLOAD_BYTES + 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024
+
+# Uploaded knowledge-base files are stored under MEDIA_ROOT.
+MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = 'media/'
+
 # Security headers and transport settings.
 #
 # With DEBUG=False the app serves production-safe defaults: HSTS, secure

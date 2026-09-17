@@ -21,6 +21,10 @@ PyJWT>=2.14.0
 idna>=3.20
 python-dotenv>=1.2.3
 httpcore>=1.0.9
+# pypdf (rag: PDF text extraction). 6.12.1 is the first release clearing the
+# 2026 advisories (PYSEC-2026-3004 fixed in 6.12.0; GHSA-wjqc-6w8f-h24c and
+# PYSEC-2026-3025 fixed in 6.12.1) -- floor is the first OSV-clean version.
+pypdf>=6.12.1
 
 # --- Clean pins (unchanged) ---------------------------------------------------
 openai==1.53.0
