@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSRF for the session-authenticated token POST: sent as X-CSRFToken. -->
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Voice</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 640px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 { text-align: center; color: #555; }
+        code { background: #e9ecef; padding: 2px 6px; border-radius: 4px; }
+        button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            color: #fff;
+            background: #007bff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 5px;
+            min-height: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Talk to Athena</h1>
+        <p>LiveKit room <code>{{ room }}</code> &middot; identity <code>{{ identity }}</code></p>
+        <button id="connectButton">Connect to voice</button>
+        <div class="status" id="voiceStatus">Not connected.</div>
+    </div>
+    <script>
+        // Mint a token server-side (POST /voice/token/), then connect with
+        // LiveKit's browser SDK. Errors surface in the status box, never as
+        // silent failures; the SDK loads from the CDN only when needed.
+        const TOKEN_URL = "{% url 'voice-token' %}";
+        const SDK_URL = 'https://unpkg.com/livekit-client/dist/livekit-client.min.js';
+
+        async function loadLiveKitSdk() {
+            if (window.LivekitClient) return;
+            await new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = SDK_URL;
+                script.onload = resolve;
+                script.onerror = () => reject(new Error('could not load the LiveKit browser SDK'));
+                document.head.appendChild(script);
+            });
+        }
+
+        document.getElementById('connectButton').addEventListener('click', async () => {
+            const status = document.getElementById('voiceStatus');
+            try {
+                status.textContent = 'Requesting access...';
+                const csrf = document.querySelector('meta[name="csrf-token"]').content;
+                const response = await fetch(TOKEN_URL, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': csrf },
+                });
+                if (!response.ok) {
+                    const body = await response.json().catch(() => ({}));
+                    throw new Error(body.error || ('token request failed (' + response.status + ')'));
+                }
+                const data = await response.json();
+                status.textContent = 'Connecting to ' + data.room + '...';
+                await loadLiveKitSdk();
+                const room = new window.LivekitClient.Room();
+                room.on('disconnected', () => {
+                    status.textContent = 'Voice disconnected. Reconnect to start again.';
+                });
+                await room.connect(data.url, data.token);
+                status.textContent = 'Connected -- start talking.';
+            } catch (err) {
+                status.textContent = 'Voice connection failed: ' + err.message;
+            }
+        });
+    </script>
+</body>
+</html>

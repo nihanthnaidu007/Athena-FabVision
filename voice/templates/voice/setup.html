@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice unavailable</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 640px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 { text-align: center; color: #555; }
+        code { background: #e9ecef; padding: 2px 6px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Voice is not configured</h1>
+        <p>
+            The voice surface needs a LiveKit deployment. Set these variables and
+            restart the web service and the voice worker:
+        </p>
+        <ul>
+            <li><code>LIVEKIT_URL</code></li>
+            <li><code>LIVEKIT_API_KEY</code></li>
+            <li><code>LIVEKIT_API_SECRET</code></li>
+        </ul>
+        <p>Until then, chat and everything else in Athena work as usual.</p>
+        <p><a href="/">Back to home</a></p>
+    </div>
+</body>
+</html>
