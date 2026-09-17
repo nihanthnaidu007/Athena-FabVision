@@ -158,9 +158,15 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Security headers and transport settings.
 #
 # With DEBUG=False the app serves production-safe defaults: HSTS, secure
-# cookies, and no-sniff. SSL redirect itself defaults to off because the
-# common deployment terminates TLS at a proxy (the proxy owns the http ->
-# https hop); set DJANGO_SECURE_SSL_REDIRECT=true to enforce it in-app.
+# cookies, and no-sniff.
+#
+# W008 disposition (deliberate): SECURE_SSL_REDIRECT stays env-gated and
+# defaults to False because the common deployment terminates TLS at an edge
+# proxy / load balancer -- the proxy owns the http -> https hop, and an
+# in-app redirect there causes redirect loops. It SHOULD be set to true
+# (DJANGO_SECURE_SSL_REDIRECT=true) whenever TLS terminates at the app
+# itself rather than at an edge proxy, e.g. a directly exposed container
+# serving its own certificate.
 if not DEBUG:
     SECURE_SSL_REDIRECT = bool_var('DJANGO_SECURE_SSL_REDIRECT', default=False)
     SECURE_HSTS_SECONDS = int_var('DJANGO_HSTS_SECONDS', default=31536000)
