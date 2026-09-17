@@ -63,7 +63,10 @@ jobs:
           python -m pip install -r requirements.lock
       - name: Audit installed environment against OSV
         run: |
-          python -m pip install --upgrade pip-audit
+          # The runner preinstalls setuptools versions carrying known
+          # advisories (e.g. PYSEC-2026-3447, fixed in 83.0.0); upgrade
+          # environment tooling first so the audit scans clean versions.
+          python -m pip install --upgrade pip pip-audit 'setuptools>=83.0.0'
           pip-audit
 
   gitleaks:
