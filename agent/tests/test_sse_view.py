@@ -161,9 +161,9 @@ def test_session_csrf_token_from_template_satisfies_check(transactional_db, user
     client.force_login(user)
 
     async def _scenario():
-        page = await client.get("/agent/")
+        page = await client.get("/")  # the chat page renders the CSRF meta tag
         match = re.search(rb'name="csrf-token" content="([^"]+)"', page.content)
-        assert match, "agent template must render the CSRF token"
+        assert match, "chat template must render the CSRF token"
         response = await client.post(
             SSE_URL,
             data={"message": "hi"},
