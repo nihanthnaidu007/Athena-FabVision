@@ -4,7 +4,8 @@ import logging
 import uuid
 
 from django.conf import settings
-from django.http import JsonResponse
+from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.http import Http404, JsonResponse
 
 from .logging_context import clear_request_id, get_request_id, set_request_id
 
@@ -54,6 +55,12 @@ class JsonErrorContractMiddleware:
 
     def process_exception(self, request, exception):
         if settings.DEBUG:
+            return None
+        # Http404/PermissionDenied/SuspiciousOperation are handled by
+        # Django's core, which renders their proper 404/403/400
+        # responses; converting them here would report every
+        # not-found/forbidden as a 500.
+        if isinstance(exception, (Http404, PermissionDenied, SuspiciousOperation)):
             return None
         request_id = getattr(request, 'request_id', '') or get_request_id()
         logger.exception(

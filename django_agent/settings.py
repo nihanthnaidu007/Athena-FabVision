@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'agent',
     'assistant',
+    'dashboard',
 ]
 
 MIDDLEWARE = [

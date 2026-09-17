@@ -1,0 +1,67 @@
+{% extends 'dashboard/base.html' %}
+{% block title %}API Keys · Athena FabVision{% endblock %}
+{% block content %}
+<h1>API Keys</h1>
+
+{% if new_raw_key %}
+<div class="banner">
+    <strong>Copy your new key now.</strong>
+    It is shown only once and cannot be retrieved later:<br>
+    <code>{{ new_raw_key }}</code>
+</div>
+{% endif %}
+
+<h2>Create a key</h2>
+<form method="post">
+    {% csrf_token %}
+    <div class="field">
+        <label for="{{ form.name.id_for_label }}">Name</label>
+        {{ form.name }}
+        {% for error in form.name.errors %}<div class="errors">{{ error }}</div>{% endfor %}
+    </div>
+    <div class="field">
+        <label for="{{ form.rate_limit_tier.id_for_label }}">Rate tier</label>
+        {{ form.rate_limit_tier }}
+        {% for error in form.rate_limit_tier.errors %}<div class="errors">{{ error }}</div>{% endfor %}
+    </div>
+    <button type="submit">Create key</button>
+</form>
+
+<h2>Your keys</h2>
+{% if key_items %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th><th>Prefix</th><th>Tier</th><th>Created</th>
+            <th>Last used</th><th>Status</th><th>Action</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for item in key_items %}
+        <tr>
+            <td>{{ item.key.name }}</td>
+            <td><code>{{ item.key.prefix }}&hellip;</code></td>
+            <td>{{ item.key.rate_limit_tier }}</td>
+            <td>{{ item.key.created_at|date:'Y-m-d H:i' }}</td>
+            <td>
+                {% if item.last_used %}{{ item.last_used|date:'Y-m-d H:i' }}{% else %}Never{% endif %}
+            </td>
+            <td>
+                {% if item.key.is_revoked %}<span class="muted">Revoked</span>{% else %}Active{% endif %}
+            </td>
+            <td>
+                {% if not item.key.is_revoked %}
+                <form class="inline" method="post" action="{% url 'dashboard:revoke-key' item.key.id %}">
+                    {% csrf_token %}
+                    <button class="danger" type="submit">Revoke</button>
+                </form>
+                {% else %}&mdash;{% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty">You have no API keys yet.</div>
+{% endif %}
+{% endblock %}
