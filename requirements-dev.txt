@@ -3,3 +3,7 @@
 pytest>=8.3
 pytest-django>=4.10
 ruff>=0.13
+# pip-tools compiles requirements.lock (reproducible build); pyyaml backs the
+# CI workflow parse tests.
+pip-tools>=7.4
+pyyaml>=6.0

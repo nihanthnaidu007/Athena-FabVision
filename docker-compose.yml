@@ -1,0 +1,12 @@
+# Local single-container verification (spec criterion 9: "docker compose up
+# serves the login page"). Production deploys use render.yaml or the Procfile.
+services:
+  web:
+    build: .
+    ports:
+      - '8000:8000'
+    environment:
+      # Compose-local placeholder; real keys go in the environment or an
+      # uncommitted .env (see .gitignore) -- never in this file.
+      DJANGO_SECRET_KEY: local-compose-not-for-production
+      DJANGO_DEBUG: 'false'

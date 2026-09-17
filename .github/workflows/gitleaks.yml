@@ -1,9 +1,13 @@
 name: gitleaks
 
+# Full-history secret scan on every push to the protected branches. Pull
+# requests are scanned by ci.yml's gitleaks job, so this workflow only
+# covers pushes (including release-branch pushes, which never target main).
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches:
+      - main
+      - 'release/**'
 
 permissions:
   contents: read
