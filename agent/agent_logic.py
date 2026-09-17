@@ -1,36 +1,29 @@
-import random
+"""Legacy /agent/ask/ fallback: keyword-routed canned responses.
+
+The 0.x-era AssistantFnc (``livekit.agents.llm.FunctionContext`` /
+``llm.ai_callable``) was removed in the livekit-agents 1.x migration -- the
+real voice surface now lives in ``voice/agent.py`` through the shared agent
+core (agent.loop + registry). This shim only preserves the historical
+/demo-grade/ behavior of the /agent/ask/ REST endpoint.
+"""
+
 import logging
-from livekit.agents import llm  # Ensure this import is correct and livekit is installed in your environment
+import random
 
-# Configure structured logging
-logger = logging.getLogger("assistant-fnc")
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
-class AssistantFnc(llm.FunctionContext):
-    """Class containing AI-callable functions for the AI assistant."""
+JOKES = [
+    'Why did the photon check into a hotel? It was traveling light.',
+    'Why did the process engineer bring a ladder to the fab? To reach the next node.',
+    'Why did the wafer go to therapy? It had too many defects to deal with.',
+]
 
-    @llm.ai_callable(description="Tell a random joke to lighten the mood.")
-    def tell_joke(self) -> str:
-        """Return a random joke."""
-        jokes = [
-            "Why do we never tell secrets on a semiconductor wafer? Because it might leak!",
-            "Why did the photon check into a hotel? Because it needed to rest its wave function!",
-            "Why do programmers hate nature? Because it has too many bugs!",
-            "I tried to read a semiconductor book on electrons... but it was over my potential.",
-        ]
-        joke = random.choice(jokes)
-        logger.info("Telling a joke: %s", joke)
-        return joke
 
 def start_agent(query):
-    """
-    Function to handle user queries and return the agent's response.
-    It decides what response to give based on the query.
-    """
-    assistant = AssistantFnc()
-    if "joke" in query.lower():
-        response = assistant.tell_joke()
+    """Handle a /agent/ask/ query the way the legacy fallback always has."""
+    if 'joke' in query.lower():
+        response = random.choice(JOKES)
     else:
-        response = "Sorry, I can only tell jokes for now!"
-    logger.info("Agent Response: %s", response)
+        response = 'Sorry, I can only tell jokes for now!'
+    logger.info('Agent Response: %s', response)
     return response

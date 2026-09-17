@@ -1,0 +1,30 @@
+# Version control
+.git/
+.github/
+
+# Virtual environments (including the audited-out vendored /ai/)
+.venv/
+venv/
+ai/
+
+# Local state the image must never bake in
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+media/
+
+# Secrets
+.env
+.env.*
+
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Dev/test tooling and local orchestration -- not part of the runtime image
+requirements-dev.txt
+docker-compose.yml
+Dockerfile
+README.md

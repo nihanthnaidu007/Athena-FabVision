@@ -1,5 +1,29 @@
+# Environment / secrets
 .env
+.env.*
+!.env.example
 
 # Byte-compiled files
 __pycache__/
 *.py[cod]
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Vendored AI assets / local tooling output
+/ai/
+
+# Local databases
+*.sqlite3
+*.sqlite3-journal
+
+# Collected static files
+/staticfiles/
+
+# User-uploaded media
+/media/
+
+# OS / editor junk
+.DS_Store
