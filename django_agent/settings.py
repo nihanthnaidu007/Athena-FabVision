@@ -31,6 +31,7 @@ ALLOWED_HOSTS = csv_var('DJANGO_ALLOWED_HOSTS', default='localhost,127.0.0.1')
 # All optional: the app must start with none of them configured. Features
 # that need a key treat its absence as "feature unavailable", not a crash.
 OPENAI_API_KEY = optional_var('OPENAI_API_KEY')
+OPENAI_CHAT_MODEL = optional_var('OPENAI_CHAT_MODEL', default='gpt-4o-mini')
 LIVEKIT_URL = optional_var('LIVEKIT_URL')
 LIVEKIT_API_KEY = optional_var('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = optional_var('LIVEKIT_API_SECRET')
