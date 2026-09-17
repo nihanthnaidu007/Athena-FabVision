@@ -5,12 +5,16 @@ drive Django's real middleware chain (which wires process_exception)
 against a raising view without adding a product endpoint.
 """
 
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.urls import path
 
 
 def raising_view(request):
     raise RuntimeError('boom')
+
+
+def http404_view(request):
+    raise Http404('no such resource')
 
 
 def ok_view(request):
@@ -19,5 +23,6 @@ def ok_view(request):
 
 urlpatterns = [
     path('boom/', raising_view, name='boom'),
+    path('gone/', http404_view, name='gone'),
     path('ok/', ok_view, name='ok'),
 ]

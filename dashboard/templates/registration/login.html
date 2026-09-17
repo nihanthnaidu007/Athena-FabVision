@@ -1,0 +1,21 @@
+{% extends 'dashboard/base.html' %}
+{% block title %}Log in · Athena FabVision{% endblock %}
+{% block content %}
+<h1>Log in</h1>
+<form method="post">
+    {% csrf_token %}
+    <div class="field">
+        <label for="{{ form.username.id_for_label }}">Username</label>
+        {{ form.username }}
+    </div>
+    <div class="field">
+        <label for="{{ form.password.id_for_label }}">Password</label>
+        {{ form.password }}
+    </div>
+    {% if form.errors %}
+    <div class="errors">Your username and password didn't match. Please try again.</div>
+    {% endif %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Log in</button>
+</form>
+{% endblock %}

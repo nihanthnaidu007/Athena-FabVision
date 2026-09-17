@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'agent',
     'assistant',
+    'dashboard',
 ]
 
 MIDDLEWARE = [
@@ -143,6 +144,11 @@ REST_FRAMEWORK = {
         'api_key_high': '600/hour',
     },
 }
+
+# Login route for @login_required pages (the dashboard app serves it
+# under /dashboard/accounts/). Must name a mounted route: Django's
+# implicit '/accounts/login/' default has no view here and would 404.
+LOGIN_URL = optional_var('DJANGO_LOGIN_URL', default='/dashboard/accounts/login/')
 
 # Internationalization
 

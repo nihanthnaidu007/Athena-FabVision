@@ -44,3 +44,18 @@ def test_debug_mode_lets_the_exception_propagate():
     with override_settings(ROOT_URLCONF='django_agent.tests.urls', DEBUG=True):
         with pytest.raises(RuntimeError):
             Client().get('/boom/')
+
+
+def test_http404_keeps_djangos_standard_404_semantics():
+    # Django core renders Http404 as a standard 404; the JSON 500
+    # contract must not intercept handled exception types.
+    with override_settings(ROOT_URLCONF='django_agent.tests.urls'):
+        response = Client().get('/gone/')
+    assert response.status_code == 404
+
+
+def test_request_id_header_still_present_on_handled_404():
+    with override_settings(ROOT_URLCONF='django_agent.tests.urls'):
+        response = Client().get('/gone/')
+    assert response.status_code == 404
+    assert response['X-Request-ID']

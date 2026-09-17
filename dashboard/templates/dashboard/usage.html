@@ -1,0 +1,55 @@
+{% extends 'dashboard/base.html' %}
+{% block title %}Usage · Athena FabVision{% endblock %}
+{% block content %}
+<h1>Usage</h1>
+<p class="window-selector">
+    Window:
+    {% for w in windows %}
+        <a href="?days={{ w }}" {% if w == window %}class="active"{% endif %}>Last {{ w }} days</a>
+    {% endfor %}
+</p>
+
+<div class="cards">
+    <div class="card"><div class="value">{{ summary.total_calls }}</div><div class="label">Requests</div></div>
+    <div class="card"><div class="value">{{ summary.tokens_in }}</div><div class="label">Tokens in</div></div>
+    <div class="card"><div class="value">{{ summary.tokens_out }}</div><div class="label">Tokens out</div></div>
+    <div class="card"><div class="value">{{ summary.avg_latency_ms }} ms</div><div class="label">Avg latency</div></div>
+    <div class="card"><div class="value">{{ summary.p95_latency_ms }} ms</div><div class="label">P95 latency</div></div>
+</div>
+
+<h2>Requests per day</h2>
+{% if summary.total_calls %}
+<svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-label="Requests per day">
+    <line x1="{{ chart.pad }}" y1="{{ chart.baseline_y }}" x2="{{ chart.width }}" y2="{{ chart.baseline_y }}" stroke="#ccc" />
+    {% for bar in chart.bars %}
+    <rect x="{{ bar.x }}" y="{{ bar.y }}" width="{{ bar.w }}" height="{{ bar.h }}" fill="#007bff" rx="2">
+        <title>{{ bar.label }}: {{ bar.value }} requests</title>
+    </rect>
+    {% endfor %}
+</svg>
+{% else %}
+<div class="empty">No usage recorded in the selected window.</div>
+{% endif %}
+
+<h2>Daily detail</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Day</th><th>Requests</th><th>Tokens in</th><th>Tokens out</th>
+            <th>Avg latency</th><th>P95 latency</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for day in summary.daily %}
+        <tr>
+            <td>{{ day.date }}</td>
+            <td>{{ day.calls }}</td>
+            <td>{{ day.tokens_in }}</td>
+            <td>{{ day.tokens_out }}</td>
+            <td>{{ day.avg_latency_ms }} ms</td>
+            <td>{{ day.p95_latency_ms }} ms</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
