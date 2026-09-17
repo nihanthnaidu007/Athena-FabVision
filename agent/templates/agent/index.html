@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSRF for session-authenticated POSTs (SSE stream and legacy ask API):
+         send this value as the X-CSRFToken header; API-key clients need no token. -->
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>AI Agent</title>
     <style>
         body {
