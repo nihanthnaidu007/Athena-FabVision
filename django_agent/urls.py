@@ -1,18 +1,13 @@
 from django.contrib import admin
-from django.http import HttpResponse
 from django.urls import include, path
 
+from agent import views as agent_views
 from django_agent import health
-
-
-def home_view(request):
-    return HttpResponse(
-        '<h1>Welcome to Athena AI Agent</h1>'
-        '<p>Go to <a href="/agent/">Agent</a> to interact with the AI.</p>'
-    )
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # The chat page (login required): conversation sidebar + message thread.
+    path('', agent_views.chat_home, name='chat-home'),
     path('agent/', include('agent.urls')),
     path('dashboard/', include('dashboard.urls')),
     # Voice surface (feature-flagged): the page renders both states, the
@@ -24,5 +19,4 @@ urlpatterns = [
     # reports optional-integration availability. Unauthenticated by design.
     path('healthz/', health.liveness, name='liveness'),
     path('healthz/ready/', health.readiness, name='readiness'),
-    path('', home_view, name='home'),
 ]

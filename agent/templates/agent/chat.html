@@ -1,0 +1,104 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSRF for session-authenticated POSTs (SSE stream, uploads, conversation CRUD):
+         chat.js sends this value as the X-CSRFToken header; API-key clients need no token. -->
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>Chat · Athena FabVision</title>
+    <link rel="icon" href="{% static 'favicon.ico' %}">
+    <link rel="stylesheet" href="{% static 'agent/chat.css' %}">
+</head>
+<body>
+<div id="chat-root"
+     data-conversation-id="{{ active_conversation.pk|default:'' }}"
+     data-stream-url="{% url 'agent-stream' %}"
+     data-upload-url="{% url 'kb-document-upload' %}"
+     data-new-chat-url="{% url 'chat-new' %}"
+     data-chat-home-url="{% url 'chat-home' %}"
+     data-llm-configured="{% if llm_configured %}true{% else %}false{% endif %}">
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-name">Athena FabVision</span>
+            <nav class="side-nav">
+                <a href="{% url 'dashboard:usage' %}">Usage</a>
+                <a href="{% url 'dashboard:keys' %}">API Keys</a>
+            </nav>
+        </div>
+        <form method="post" action="{% url 'chat-new' %}" class="new-chat-form">
+            {% csrf_token %}
+            <button type="submit" class="btn new-chat-btn">+ New chat</button>
+        </form>
+        <div class="conversation-list" id="conversation-list">
+            {% for item in conversation_items %}
+            <div class="conversation-item{% if item.is_active %} active{% endif %}"
+                 data-conversation-item="{{ item.conversation.pk }}">
+                <a class="conversation-link" href="{% url 'chat-home' %}?c={{ item.conversation.pk }}"
+                   title="{{ item.conversation.title }}">{{ item.conversation.title }}</a>
+                <form method="post" action="{% url 'chat-delete' item.conversation.pk %}" class="inline"
+                      data-confirm="Delete this conversation and its messages?">
+                    {% csrf_token %}
+                    <button type="submit" class="icon-btn delete-btn" aria-label="Delete conversation"
+                            title="Delete conversation">&times;</button>
+                </form>
+            </div>
+            {% empty %}
+            <div class="sidebar-empty">No conversations yet.</div>
+            {% endfor %}
+        </div>
+        <div class="side-footer">
+            <span class="muted">{{ user.username }}</span>
+            <form class="inline" method="post" action="{% url 'dashboard:logout' %}">
+                {% csrf_token %}
+                <button type="submit">Log out</button>
+            </form>
+        </div>
+    </aside>
+    <main class="chat-main">
+        {% if not llm_configured %}
+        <div class="degraded-banner" data-degraded-banner>
+            Model not configured on this deployment — set OPENAI_API_KEY to enable answers.
+            Browsing history and knowledge-base uploads still work.
+        </div>
+        {% endif %}
+        <div class="thread" id="thread" aria-live="polite">
+            {% for item in message_items %}
+            <article class="message msg-{{ item.message.role }}"
+                     data-message-id="{{ item.message.pk }}" data-role="{{ item.message.role }}">
+                <div class="msg-bubble">
+                    <div class="msg-content" data-content-for="{{ item.content_id }}"></div>
+                    {{ item.message.content|json_script:item.content_id }}
+                    <div class="chips" data-chips-for="{{ item.sources_id }}"></div>
+                    {{ item.message.sources|json_script:item.sources_id }}
+                    <div class="tool-blocks" data-blocks-for="{{ item.blocks_id }}"></div>
+                    {{ item.message.tool_blocks|json_script:item.blocks_id }}
+                </div>
+            </article>
+            {% empty %}
+            <div class="thread-empty" data-thread-empty>
+                Start the conversation — ask about a wafer map, triage an excursion, or upload a
+                document to ground answers in your own fab data.
+            </div>
+            {% endfor %}
+        </div>
+        <div class="composer-zone">
+            <div class="upload-status" id="upload-status" hidden></div>
+            <form id="composer-form" autocomplete="off">
+                <input type="file" id="kb-file-input" accept=".txt,.md,.pdf" hidden>
+                <button type="button" id="upload-button" class="composer-btn"
+                        title="Upload a .txt, .md, or .pdf to your knowledge base">📎</button>
+                <textarea id="composer-input" rows="1"
+                          placeholder="Ask Athena about your fab data…"></textarea>
+                <button type="submit" id="send-button" class="send-btn">Send</button>
+                <button type="button" id="stop-button" class="stop-btn" hidden>■ Stop</button>
+            </form>
+        </div>
+    </main>
+</div>
+<script src="{% static 'agent/purify.min.js' %}"></script>
+<script src="{% static 'agent/marked.umd.min.js' %}"></script>
+<script src="{% static 'agent/chat.js' %}"></script>
+</body>
+</html>
