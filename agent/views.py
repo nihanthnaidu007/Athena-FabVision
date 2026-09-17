@@ -1,8 +1,10 @@
 from django.shortcuts import render
-from rest_framework.views import APIView
-from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from .agent_logic import start_agent
+
 
 class AgentAPIView(APIView):
     """
@@ -11,7 +13,10 @@ class AgentAPIView(APIView):
     def post(self, request):
         query = request.data.get('query')
         if not query:
-            return Response({"error": "Query parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response = start_agent(query)
         return Response({"response": response})

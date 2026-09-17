@@ -1,6 +1,9 @@
-import random
 import logging
-from livekit.agents import llm  # Ensure this import is correct and livekit is installed in your environment
+import random
+
+from livekit.agents import (
+    llm,  # livekit must be installed in your environment
+)
 
 # Configure structured logging
 logger = logging.getLogger("assistant-fnc")

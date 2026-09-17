@@ -1,9 +1,10 @@
-import asyncio
 import logging
+
 from dotenv import load_dotenv
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import openai, silero
+
 from api import AssistantFnc
 
 # Load environment variables
@@ -20,9 +21,9 @@ class VoiceAssistantError(Exception):
 def load_instructions(file_path):
     """Read instructions from a text file."""
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, encoding='utf-8') as file:
             return file.read()
-    except (FileNotFoundError, IOError) as e:
+    except (OSError, FileNotFoundError) as e:
         logger.error("Error loading instructions file: %s", e)
         raise VoiceAssistantError("Failed to load instructions file") from e
 
@@ -67,7 +68,11 @@ async def entrypoint(ctx: JobContext):
                 await assistant.say(joke, allow_interruptions=True)
             # Check for insight requests
             elif "insight" in user_input.lower() or "tell me about" in user_input.lower():
-                topic = user_input.split("about")[-1].strip() if "about" in user_input else "general"
+                topic = (
+                    user_input.split("about")[-1].strip()
+                    if "about" in user_input
+                    else "general"
+                )
                 insight = fnc_ctx.provide_insight(topic)
                 await assistant.say(insight, allow_interruptions=True)
             # Web search for unknown requests
