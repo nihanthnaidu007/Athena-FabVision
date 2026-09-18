@@ -62,12 +62,15 @@ def test_chat_home_renders_client_contract(client, user):
     assert 'id="chat-root"' in html
     assert 'data-stream-url="/agent/stream/"' in html
     assert 'data-upload-url="/kb/documents/"' in html
+    assert 'data-example-wafer-url="/kb/documents/example-wafer/"' in html
     assert 'data-new-chat-url="/agent/chat/new/"' in html
     assert 'data-mode-url="/agent/chat/mode/"' in html
     assert 'id="composer-form"' in html
     assert 'id="stop-button"' in html
     assert 'id="kb-file-input"' in html
-    assert 'accept=".txt,.md,.pdf"' in html
+    # CSV joined the accept list as a storage-only class (spec feature 2).
+    assert 'accept=".txt,.md,.pdf,.csv"' in html
+    assert 'id="example-wafer-button"' in html
     assert 'id="conversation-list"' in html
 
 

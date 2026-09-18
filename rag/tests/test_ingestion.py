@@ -6,7 +6,7 @@ the network or needs an API key.
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from assistant.models import Chunk, Document
 from rag.ingestion import (
@@ -242,3 +242,74 @@ class ReingestDocumentTests(TempMediaMixin, TestCase):
         self.assertTrue(result.retryable)
         document.refresh_from_db()
         self.assertEqual(document.chunks.count(), 0)
+
+
+class StorageOnlyIngestionTests(TempMediaMixin, TestCase):
+    """CSV documents are stored verbatim for the wafer analyzer.
+
+    Storage-only means no chunking and no embeddings: the analyzer owns
+    parsing, so even malformed CSV ingests ready and fails honestly (a
+    structured error block) when analyzed -- never silently at upload.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user('alice')
+
+    def make_csv_document(self, content: bytes, filename: str = 'lot42.csv'):
+        document = Document.objects.create(
+            user=self.user,
+            original_filename=filename,
+            file_type='csv',
+            sha256='0' * 64,
+        )
+        document.file.save(filename, ContentFile(content), save=True)
+        return document
+
+    def test_csv_ingests_ready_without_chunks_or_embedder(self):
+        document = self.make_csv_document(b'wafer_id,x,y,bin\nW1,0,0,1\n')
+
+        result = ingest_document(document)
+
+        self.assertEqual(result.status, Document.Status.READY)
+        self.assertEqual(result.chunk_count, 0)
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.READY)
+        self.assertEqual(document.chunks.count(), 0)
+        self.assertIn('Storage-only', result.detail)
+
+    def test_csv_needs_no_embedder_even_in_zero_key_deployment(self):
+        # No embedder injected and none configured: storage-only documents
+        # are still ready -- they are never part of retrieval.
+        document = self.make_csv_document(b'wafer_id,x,y,bin\nW1,0,0,1\n')
+
+        with override_settings(OPENAI_API_KEY=None):
+            result = ingest_document(document)
+
+        self.assertEqual(result.status, Document.Status.READY)
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.READY)
+
+    def test_malformed_csv_still_ingests_ready(self):
+        # Missing the bin column: the upload must not parse the file.
+        document = self.make_csv_document(b'id,x,y\nW1,0,0\n')
+
+        result = ingest_document(document)
+
+        self.assertEqual(result.status, Document.Status.READY)
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.READY)
+        self.assertEqual(document.failure_reason, '')
+
+    def test_unreadable_stored_csv_marks_failed(self):
+        document = self.make_csv_document(b'wafer_id,x,y,bin\nW1,0,0,1\n')
+        # Simulate a lost backing file: the row exists, the bytes are gone.
+        document.file.storage.delete(document.file.name)
+
+        result = ingest_document(document)
+
+        self.assertEqual(result.status, Document.Status.FAILED)
+        self.assertFalse(result.retryable)
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.FAILED)
+        self.assertIn('could not read the stored file', document.failure_reason)

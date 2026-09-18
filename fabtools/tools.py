@@ -53,6 +53,59 @@ def _load_retrieve() -> Callable[..., Any] | None:
     return _rag_retrieve
 
 
+# Lazy, cached lookup of the Django Document model (None outside Django).
+# Uploaded CSVs are knowledge-base documents; the analyzer resolves their
+# storage names through the requesting user's own rows, never through raw
+# path arithmetic. Module-level so tests can inject a fake by setting
+# fabtools.tools._document_model and marking _document_loaded = True.
+_document_loaded = False
+_document_model: Any | None = None
+
+
+def _load_document_model() -> Any:
+    global _document_loaded, _document_model
+    if not _document_loaded:
+        try:
+            from django.apps import apps
+
+            _document_model = apps.get_model('assistant', 'Document')
+        except Exception:  # Django missing or apps not ready: stay standalone
+            _document_model = None
+        _document_loaded = True
+    return _document_model
+
+
+def _owned_document_path_sync(user: Any, path: str) -> str | None:
+    """Local file path for a KB storage name, strictly owned by ``user``.
+
+    A relative ``path`` must match a Document row belonging to the
+    requesting user, so one user can never point the analyzer at another
+    user's upload or at arbitrary server paths -- unmatched names touch
+    no filesystem at all. Returns None when Django is unavailable or
+    nothing user-owned matches.
+    """
+    document_model = _load_document_model()
+    if document_model is None or user is None:
+        return None
+    try:
+        document = document_model.objects.for_user(user).filter(file=path).first()
+    except Exception:
+        return None
+    if document is None:
+        return None
+    try:
+        return document.file.path
+    except (OSError, NotImplementedError, ValueError):  # no local file (remote storage)
+        return None
+
+
+async def _resolve_owned_path(user: Any, path: str) -> str | None:
+    """Async wrapper: the owned path lookup runs off the event loop."""
+    from asgiref.sync import sync_to_async
+
+    return await sync_to_async(_owned_document_path_sync)(user, path)
+
+
 def _always_available() -> bool:
     return True
 
@@ -82,15 +135,31 @@ async def wafer_map_analyze(
 ) -> Block:
     """Analyze a wafer-bin CSV (columns wafer_id,x,y,bin) into a wafer_map block.
 
-    Accepts the CSV text directly (``csv_content``) or a filesystem path to a
-    previously uploaded CSV (``path``). Never raises: malformed input returns
-    the structured error block.
+    Accepts the CSV text directly (``csv_content``) or a file reference
+    (``path``): either a knowledge-base storage name -- a CSV uploaded by
+    *this* user, resolved strictly through their own documents -- or an
+    absolute filesystem path. Never raises: malformed input returns the
+    structured error block.
     """
     if isinstance(csv_content, str) and csv_content.strip():
         return wafer_map.analyze_wafer_csv(csv_content)
     if path is not None:
+        resolved = Path(path)
+        if not resolved.is_absolute():
+            # A relative name is a knowledge-base storage name: resolve it
+            # through the requesting user's own documents (the lookup runs
+            # off the event loop), never the raw filesystem.
+            owned = await _resolve_owned_path(user, path)
+            if owned is None:
+                return wafer_map.error_block(
+                    f'no wafer CSV named {path!r} in this user\'s knowledge base; '
+                    'upload the CSV (paper-clip button or POST /kb/documents/) '
+                    'and analyze it from its file_path',
+                    code='wafer_csv_not_found',
+                )
+            resolved = Path(owned)
         try:
-            content = Path(path).read_text(encoding='utf-8', errors='replace')
+            content = resolved.read_text(encoding='utf-8', errors='replace')
         except OSError as exc:
             return wafer_map.error_block(
                 f'could not read the wafer CSV at {path!r}: {exc}',
@@ -288,6 +357,38 @@ async def web_search(
         'rows': rows,
         'results': clean,
     }
+
+
+# LLM-facing schemas for tools whose arguments the model must name exactly.
+# The registry loader merges these in additively -- a tool without an entry
+# keeps the generic schema, so TOOLS stays a list of [name, fn, availability].
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    'wafer_map_analyze': {
+        'description': (
+            'Analyze a wafer-bin CSV (columns wafer_id,x,y,bin) and return die, '
+            'yield, and spatial-pattern statistics as a wafer_map block. Pass '
+            'csv_content (the CSV text) or path (the file_path of a CSV document '
+            'in the user\'s knowledge base, from an upload response).'
+        ),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'csv_content': {
+                    'type': 'string',
+                    'description': 'The wafer-bin CSV text itself.',
+                },
+                'path': {
+                    'type': 'string',
+                    'description': (
+                        'The file_path of a CSV document the user uploaded to '
+                        'their knowledge base, e.g. '
+                        '"documents/2026/09/18/wafer.csv".'
+                    ),
+                },
+            },
+        },
+    },
+}
 
 
 TOOLS: list[tuple[str, ToolFn, AvailabilityFn]] = [

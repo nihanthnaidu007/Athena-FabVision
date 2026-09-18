@@ -55,6 +55,16 @@ class TestRegistryContract:
             'kb_search', 'web_search',
         } <= names
 
+    def test_tool_schemas_cover_the_wafer_tool(self):
+        # The LLM must learn the path/csv_content arguments by name; the
+        # loader merges TOOL_SCHEMAS in additively.
+        schema = tools.TOOL_SCHEMAS['wafer_map_analyze']
+        properties = schema['parameters']['properties']
+        assert 'csv_content' in properties
+        assert 'path' in properties
+        schema_text = schema['description'] + properties['path']['description']
+        assert 'file_path' in schema_text
+
     def test_tool_functions_are_async(self):
         for _name, fn, _available in tools.TOOLS:
             assert inspect.iscoroutinefunction(fn)
@@ -102,6 +112,19 @@ class TestWaferTool:
         block = run(tools.wafer_map_analyze(None, path=str(tmp_path / 'missing.csv')))
         assert block['type'] == 'error'
         assert block['code'] == 'wafer_csv_unreadable'
+
+    def test_relative_path_without_an_owner_is_denied_not_read_from_cwd(self):
+        # A relative name is a knowledge-base storage name: without a
+        # resolvable owning document it is refused -- the raw filesystem
+        # (CWD) is never probed with it.
+        block = run(tools.wafer_map_analyze(None, path='documents/2026/09/18/w.csv'))
+        assert block['type'] == 'error'
+        assert block['code'] == 'wafer_csv_not_found'
+
+    def test_traversal_shaped_relative_path_is_denied(self):
+        block = run(tools.wafer_map_analyze(None, path='../../secrets.csv'))
+        assert block['type'] == 'error'
+        assert block['code'] == 'wafer_csv_not_found'
 
 
 class TestSpcTool:

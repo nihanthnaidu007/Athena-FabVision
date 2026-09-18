@@ -182,15 +182,25 @@ def load_fab_tools(registry: ToolRegistry | None = None, importer: Any = None) -
         return False
 
     loaded = 0
+    schemas = getattr(module, 'TOOL_SCHEMAS', None)
+    if not isinstance(schemas, dict):
+        schemas = {}
     for entry in entries:
-        registered = _register_entry(reg, entry)
+        registered = _register_entry(reg, entry, schemas)
         loaded += 1 if registered else 0
     logger.info('Loaded %d of %d fab tool entries.', loaded, len(entries))
     return loaded > 0
 
 
-def _register_entry(reg: ToolRegistry, entry: Any) -> bool:
-    """Register one ``[name, fn, availability_fn]`` entry, defensively."""
+def _register_entry(
+    reg: ToolRegistry, entry: Any, schemas: dict[str, Any] | None = None
+) -> bool:
+    """Register one ``[name, fn, availability_fn]`` entry, defensively.
+
+    An optional ``TOOL_SCHEMAS[name]`` entry supplies the LLM-facing
+    description and parameter schema; a tool without one (or with a
+    malformed one) keeps the generic schema, so schemas are additive.
+    """
     if not isinstance(entry, (list, tuple)) or not 2 <= len(entry) <= 3:
         logger.warning('Skipping malformed fab tool entry: %r', entry)
         return False
@@ -202,7 +212,19 @@ def _register_entry(reg: ToolRegistry, entry: Any) -> bool:
     if availability_fn is not None and not callable(availability_fn):
         logger.warning('Skipping fab tool %r: availability_fn is not callable.', name)
         return False
-    reg.register(name, fn, availability_fn)
+    schema = (schemas or {}).get(name)
+    if not isinstance(schema, dict):
+        schema = {}
+    parameters = schema.get('parameters')
+    if not isinstance(parameters, dict):
+        parameters = None
+    reg.register(
+        name,
+        fn,
+        availability_fn,
+        description=schema.get('description') or '',
+        parameters=parameters,
+    )
     return True
 
 
