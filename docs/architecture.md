@@ -16,7 +16,8 @@ agent loop, so behavior never forks between web and voice.
 │ 3 · Retrieval (RAG)    upload → extract → chunk → embed → cosine │
 ├──────────────────────────────────────────────────────────────────┤
 │ 4 · Fab tools          wafer_map_analyze · excursion_triage ·    │
-│                        kb_search · web_search (optional)         │
+│                        spc_rules_check · kb_search ·             │
+│                        web_search (optional)                     │
 ├──────────────────────────────────────────────────────────────────┤
 │ 1 · Config core        12-factor settings; boots with zero keys  │
 └──────────────────────────────────────────────────────────────────┘
@@ -70,12 +71,14 @@ typed registry (`agent/registry.py`):
 | --- | --- | --- |
 | `wafer_map_analyze` | always | Wafer-bin CSV (`wafer_id,x,y,bin`) → yield, bin histogram, edge-ring / center-hotspot spatial patterns, rendered as a `wafer_map` block |
 | `excursion_triage` | always | Lot metrics → rule-based triage table |
+| `spc_rules_check` | always | A measurement series (CSV/JSON text or list, 2–1000 points, optional known sigma) → control limits (`x̄ ± 3σ`, estimated from the mean moving range when sigma is unknown), the eight Nelson rules, an SVG run chart with violation markers, and a plain-language verdict, rendered as an `spc_chart` block |
 | `kb_search` | when embeddings are possible | Cited search over the user's knowledge base |
 | `web_search` | only when `GOOGLE_API_KEY` + `GOOGLE_SEARCH_ENGINE_ID` are set | Google Programmable Search |
 
 Availability is computed per request and the model is told what it can call —
 no silent tool failures. Tool results are structured blocks (`table`,
-`wafer_map`, `text`, `error`) rendered in the UI and fed back to the model.
+`wafer_map`, `spc_chart`, `text`, `error`) rendered in the UI and fed back to
+the model.
 
 ## Layer 5 · Web surface
 
