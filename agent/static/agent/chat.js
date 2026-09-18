@@ -699,6 +699,7 @@
         var conversationList = $('#conversation-list');
         var tutorToggle = $('#tutor-toggle');
         var modeStatus = $('#mode-status');
+        var notebookSelect = $('#notebook-select');
 
         var state = {
             conversationId: root.getAttribute('data-conversation-id') || '',
@@ -731,6 +732,11 @@
             input.disabled = streaming;
             uploadButton.disabled = streaming;
             tutorToggle.disabled = streaming;
+            // The notebook scope is creation-time only: locked once the
+            // conversation exists, disabled while a turn streams.
+            if (notebookSelect) {
+                notebookSelect.disabled = streaming || Boolean(state.conversationId);
+            }
             stopButton.hidden = !streaming;
         }
 
@@ -859,7 +865,15 @@
             return badge;
         }
 
-        function addSidebarConversation(id, title, mode) {
+        function notebookBadge(name) {
+            var badge = el('span', 'notebook-badge');
+            badge.setAttribute('data-notebook-badge', '');
+            badge.setAttribute('title', 'Notebook-scoped: ' + name);
+            badge.textContent = name;
+            return badge;
+        }
+
+        function addSidebarConversation(id, title, mode, notebookName) {
             if (sidebarConversationExists(id)) return;
             var item = el('div', 'conversation-item');
             item.setAttribute('data-conversation-item', id);
@@ -867,6 +881,7 @@
             link.href = state.chatHomeUrl + '?c=' + id;
             item.appendChild(link);
             if (mode === 'tutor') item.appendChild(modeBadge());
+            if (notebookName) item.appendChild(notebookBadge(notebookName));
             conversationList.prepend(item);
         }
 
@@ -883,10 +898,16 @@
             }
         }
 
+        function selectedNotebookName() {
+            if (!notebookSelect || !notebookSelect.value) return '';
+            var option = notebookSelect.options[notebookSelect.selectedIndex];
+            return option ? option.textContent : '';
+        }
+
         function setConversation(id, title) {
             state.conversationId = String(id);
             root.setAttribute('data-conversation-id', state.conversationId);
-            addSidebarConversation(id, title, state.mode);
+            addSidebarConversation(id, title, state.mode, selectedNotebookName());
             var nextUrl = state.chatHomeUrl + '?c=' + id;
             if (window.history && window.history.replaceState) {
                 window.history.replaceState(null, '', nextUrl);
@@ -973,7 +994,12 @@
                     conversation_id: state.conversationId ? Number(state.conversationId) : undefined,
                     // Creation-time only: an existing conversation's persisted
                     // mode rules, changed through the mode endpoint.
-                    mode: state.conversationId ? undefined : state.mode
+                    mode: state.conversationId ? undefined : state.mode,
+                    // Creation-time only: an existing conversation keeps its
+                    // own notebook scope; empty means the whole KB.
+                    notebook_id: state.conversationId || !notebookSelect
+                        ? undefined
+                        : (notebookSelect.value || undefined)
                 }),
                 signal: controller.signal
             }).then(function (response) {

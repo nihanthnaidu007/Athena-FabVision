@@ -201,7 +201,11 @@ def _message_items(messages: list[Message], user: Any) -> list[dict[str, Any]]:
 
 def _conversation_items(user: Any, active_pk: int | None) -> list[dict[str, Any]]:
     """Sidebar rows; ``is_active`` marks the conversation being viewed."""
-    conversations = list(Conversation.objects.for_user(user)[:SIDEBAR_CONVERSATION_LIMIT])
+    # select_related('notebook') feeds the sidebar's notebook badge
+    # without one query per row.
+    conversations = list(
+        Conversation.objects.for_user(user).select_related('notebook')[:SIDEBAR_CONVERSATION_LIMIT]
+    )
     return [
         {'conversation': conversation, 'is_active': conversation.pk == active_pk}
         for conversation in conversations
@@ -236,6 +240,9 @@ def chat_home(request: HttpRequest) -> HttpResponse:
             'active_conversation': active_conversation,
             'message_items': _message_items(messages, request.user),
             'llm_configured': default_client() is not None,
+            # Composer notebook scope (v1.1 #5): new conversations can
+            # start scoped; an active conversation renders its own value.
+            'notebooks': list(Notebook.objects.for_user(request.user).order_by('name')),
         },
     )
 

@@ -43,6 +43,9 @@
                 {% if item.conversation.mode == 'tutor' %}
                 <span class="mode-badge" data-mode-badge title="Tutor mode">tutor</span>
                 {% endif %}
+                {% if item.conversation.notebook %}
+                <span class="notebook-badge" title="Notebook-scoped: {{ item.conversation.notebook.name }}">{{ item.conversation.notebook.name }}</span>
+                {% endif %}
                 <form method="post" action="{% url 'chat-delete' item.conversation.pk %}" class="inline"
                       data-confirm="Delete this conversation and its messages?">
                     {% csrf_token %}
@@ -93,6 +96,17 @@
         <div class="composer-zone">
             <div class="upload-status" id="upload-status" hidden></div>
             <div class="composer-tools">
+                <select id="notebook-select" class="notebook-select"
+                        title="Scope a NEW conversation to a notebook: answers then ground only in its documents. An open conversation keeps its own scope."
+                        {% if active_conversation %}data-locked="true"{% endif %}>
+                    <option value="">Whole knowledge base</option>
+                    {% for notebook in notebooks %}
+                    <option value="{{ notebook.pk }}"
+                            {% if active_conversation and active_conversation.notebook_id == notebook.pk %}selected{% endif %}>
+                        {{ notebook.name }}
+                    </option>
+                    {% endfor %}
+                </select>
                 <button type="button" id="tutor-toggle" class="tutor-toggle{% if active_conversation and active_conversation.mode == 'tutor' %} on{% endif %}"
                         aria-pressed="{% if active_conversation and active_conversation.mode == 'tutor' %}true{% else %}false{% endif %}"
                         title="Tutor mode: Athena guides with hints and questions instead of final answers">

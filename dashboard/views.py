@@ -20,12 +20,14 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
-from assistant.models import ApiKey, Document, MessageFeedback, UsageEvent
+from assistant.models import ApiKey, Document, MessageFeedback, Notebook, UsageEvent
 from rag.ingestion import reingest_document as reingest_document_service
 
 from .aggregates import breakdowns, chart_bars, feedback_summary, parse_days, usage_summary
 from .forms import ApiKeyCreateForm
 from .seed import seed_new_user_knowledge_base
+
+NOTEBOOK_NAME_MAX = 200  # mirrors the model's CharField length
 
 
 class LoginView(auth_views.LoginView):
@@ -161,7 +163,12 @@ def documents_view(request: HttpRequest) -> HttpResponse:
     annotated query -- no per-row follow-ups.
     """
     documents = Document.objects.for_user(request.user).annotate(chunk_count=Count('chunks'))
-    return render(request, 'dashboard/documents.html', {'documents': documents})
+    notebooks = list(Notebook.objects.for_user(request.user).order_by('name'))
+    return render(
+        request,
+        'dashboard/documents.html',
+        {'documents': documents, 'notebooks': notebooks},
+    )
 
 
 @login_required
@@ -210,4 +217,99 @@ def reingest_document(request: HttpRequest, doc_id: int) -> HttpResponse:
         messages.error(
             request, f'Re-ingest of "{document.original_filename}" failed: {result.detail}'
         )
+    return redirect('dashboard:documents')
+
+
+def _valid_notebook_name(name: str) -> bool:
+    """A notebook name is non-empty and fits the model's CharField."""
+    return 0 < len(name) <= NOTEBOOK_NAME_MAX
+
+
+@login_required
+@require_http_methods(['GET', 'POST'])
+def notebooks_view(request: HttpRequest) -> HttpResponse:
+    """List the user's notebooks with member counts; create from the form.
+
+    Counts use distinct annotations because documents and conversations
+    join from different FKs -- without ``distinct=True`` the cross join
+    would multiply both numbers. Creation validates the name up front so
+    the per-user uniqueness constraint surfaces as a readable banner
+    instead of a 500.
+    """
+    if request.method == 'POST':
+        name = str(request.POST.get('name') or '').strip()
+        if not _valid_notebook_name(name):
+            messages.error(request, 'A notebook name is required (up to 200 characters).')
+        elif Notebook.objects.for_user(request.user).filter(name=name).exists():
+            messages.error(request, f'You already have a notebook named "{name}".')
+        else:
+            Notebook.objects.create(user=request.user, name=name)
+            messages.success(request, f'Created notebook "{name}".')
+        return redirect('dashboard:notebooks')
+    notebooks = (
+        Notebook.objects.for_user(request.user)
+        .annotate(
+            document_count=Count('documents', distinct=True),
+            conversation_count=Count('conversations', distinct=True),
+        )
+        .order_by('name')
+    )
+    return render(request, 'dashboard/notebooks.html', {'notebooks': notebooks})
+
+
+@login_required
+@require_POST
+def rename_notebook(request: HttpRequest, notebook_id: int) -> HttpResponse:
+    """Rename one of the user's notebooks; other users' notebooks 404 here."""
+    notebook = get_object_or_404(Notebook.objects.for_user(request.user), pk=notebook_id)
+    name = str(request.POST.get('name') or '').strip()
+    if not _valid_notebook_name(name):
+        messages.error(request, 'A notebook name is required (up to 200 characters).')
+    elif (
+        Notebook.objects.for_user(request.user).filter(name=name).exclude(pk=notebook.pk).exists()
+    ):
+        messages.error(request, f'You already have a notebook named "{name}".')
+    else:
+        notebook.name = name
+        notebook.save(update_fields=['name'])
+        messages.success(request, f'Renamed notebook to "{name}".')
+    return redirect('dashboard:notebooks')
+
+
+@login_required
+@require_POST
+def delete_notebook(request: HttpRequest, notebook_id: int) -> HttpResponse:
+    """Delete a notebook: members survive, unscoped (SET_NULL), never deleted."""
+    notebook = get_object_or_404(Notebook.objects.for_user(request.user), pk=notebook_id)
+    name = notebook.name
+    notebook.delete()
+    messages.success(
+        request,
+        f'Deleted notebook "{name}". Its documents and conversations were kept, now unscoped.',
+    )
+    return redirect('dashboard:notebooks')
+
+
+@login_required
+@require_POST
+def assign_document_notebook(request: HttpRequest, doc_id: int) -> HttpResponse:
+    """Assign one of the user's documents to a notebook; empty value unassigns.
+
+    Both sides are ownership-checked: the document through ``for_user``,
+    the target notebook through its own scoped queryset, so a foreign
+    notebook id 404s instead of silently linking across users.
+    """
+    document = get_object_or_404(Document.objects.for_user(request.user), pk=doc_id)
+    raw = request.POST.get('notebook_id')
+    if raw in (None, ''):
+        document.notebook = None
+        document.save(update_fields=['notebook'])
+        messages.success(request, f'"{document.original_filename}" unassigned from notebooks.')
+        return redirect('dashboard:documents')
+    notebook = get_object_or_404(Notebook.objects.for_user(request.user), pk=raw)
+    document.notebook = notebook
+    document.save(update_fields=['notebook'])
+    messages.success(
+        request, f'"{document.original_filename}" moved to notebook "{notebook.name}".'
+    )
     return redirect('dashboard:documents')

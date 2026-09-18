@@ -29,7 +29,7 @@
 <table>
     <thead>
         <tr>
-            <th>File</th><th>Type</th><th>Status</th><th>Chunks</th>
+            <th>File</th><th>Type</th><th>Notebook</th><th>Status</th><th>Chunks</th>
             <th>Uploaded</th><th>Failure reason</th><th>Actions</th>
         </tr>
     </thead>
@@ -38,6 +38,22 @@
         <tr>
             <td>{{ document.original_filename }}</td>
             <td>{{ document.file_type|default:'&mdash;' }}</td>
+            <td>
+                <form class="inline" method="post"
+                      action="{% url 'dashboard:assign-document-notebook' document.id %}">
+                    {% csrf_token %}
+                    <select name="notebook_id" title="Scope this document to a notebook">
+                        <option value="" {% if not document.notebook_id %}selected{% endif %}>&mdash;</option>
+                        {% for notebook in notebooks %}
+                        <option value="{{ notebook.id }}"
+                                {% if document.notebook_id == notebook.id %}selected{% endif %}>
+                            {{ notebook.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit">Save</button>
+                </form>
+            </td>
             <td><span class="status {{ document.status }}">{{ document.status }}</span></td>
             <td>{{ document.chunk_count }}</td>
             <td>{{ document.created_at|date:'Y-m-d H:i' }}</td>

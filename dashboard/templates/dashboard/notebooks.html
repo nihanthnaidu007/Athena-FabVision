@@ -1,0 +1,70 @@
+{% extends 'dashboard/base.html' %}
+{% block title %}Notebooks · Athena FabVision{% endblock %}
+{% block content %}
+<style>
+    .banner.success { background: #d4edda; color: #155724; }
+    .banner.error { background: #f8d7da; color: #721c24; }
+</style>
+<h1>Notebooks</h1>
+<p class="muted">
+    Notebooks group documents (and conversations) so chat answers can ground in one
+    course topic instead of everything at once. Assign documents from the
+    <a href="{% url 'dashboard:documents' %}">documents page</a>; new chats pick a
+    notebook from the composer. Deleting a notebook keeps its members &mdash; they
+    just go back to the whole knowledge base.
+</p>
+
+{% if messages %}
+    {% for message in messages %}
+    <div class="banner {{ message.tags }}">{{ message }}</div>
+    {% endfor %}
+{% endif %}
+
+<h2>New notebook</h2>
+<form method="post" action="{% url 'dashboard:notebooks' %}" class="inline">
+    {% csrf_token %}
+    <input type="text" name="name" maxlength="200" placeholder="e.g. Lithography" required>
+    <button type="submit">Create</button>
+</form>
+
+{% if notebooks %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th><th>Documents</th><th>Conversations</th>
+            <th>Created</th><th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for notebook in notebooks %}
+        <tr>
+            <td>{{ notebook.name }}</td>
+            <td>{{ notebook.document_count }}</td>
+            <td>{{ notebook.conversation_count }}</td>
+            <td>{{ notebook.created_at|date:'Y-m-d' }}</td>
+            <td>
+                <form class="inline" method="post"
+                      action="{% url 'dashboard:rename-notebook' notebook.id %}">
+                    {% csrf_token %}
+                    <input type="text" name="name" maxlength="200"
+                           placeholder="{{ notebook.name }}" required>
+                    <button type="submit">Rename</button>
+                </form>
+                <form class="inline" method="post"
+                      action="{% url 'dashboard:delete-notebook' notebook.id %}"
+                      onsubmit="return confirm('Delete &quot;{{ notebook.name|escapejs }}&quot;? Its documents and conversations are kept, unscoped.');">
+                    {% csrf_token %}
+                    <button class="danger" type="submit">Delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty">
+    No notebooks yet. Create one above, then assign documents to it from the
+    documents page.
+</div>
+{% endif %}
+{% endblock %}
