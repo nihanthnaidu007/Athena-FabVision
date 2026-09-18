@@ -1,0 +1,20 @@
+# gitleaks configuration (picked up from the repo root by gitleaks-action).
+#
+# Allowlist scope: placeholder credentials in test fixtures. Registration-
+# style tests must post quoted literals for Django's UserCreationForm
+# (password1/password2), which the generic-api-key rule reads as leaked
+# secrets — they are throwaway fixture values, not credentials.
+#
+# Deliberately narrow: only the generic-api-key rule is suppressed, only
+# under tests/ directories. Real secret rules (AWS keys, private keys,
+# provider tokens, ...) remain active on every path, and the tests are
+# zero-network with scripted providers, so no real credential can live
+# in them by design.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholder credentials in test fixtures"
+paths = ['''(^|/)tests/''']
+rules = ['''generic-api-key''']

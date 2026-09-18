@@ -159,6 +159,12 @@ REST_FRAMEWORK = {
 # implicit '/accounts/login/' default has no view here and would 404.
 LOGIN_URL = optional_var('DJANGO_LOGIN_URL', default='/dashboard/accounts/login/')
 
+# Self-service registration (v1.1 #3). On by default so anyone given
+# the URL can create an account (seeded with starter documents); a
+# private deployment sets SIGNUPS_ENABLED=false, which removes the
+# register route (404) and hides the login-page link.
+SIGNUPS_ENABLED = bool_var('SIGNUPS_ENABLED', default=True)
+
 # Internationalization
 
 LANGUAGE_CODE = 'en-us'
