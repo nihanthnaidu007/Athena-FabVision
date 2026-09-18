@@ -39,6 +39,28 @@ SYSTEM_PROMPT = (
     'uncertainty.'
 )
 
+TUTOR_SYSTEM_PROMPT = (
+    'You are Athena, a Socratic tutor for semiconductor fab and process engineering. '
+    "Never give the final answer or a complete solution: reply with hints, guiding "
+    'questions, and one next step at a time, and check the student\'s understanding as '
+    'you go. Ground hints in retrieved knowledge-base context and cite it; you may run '
+    'tools, but guide the student through interpreting each result instead of stating '
+    'the conclusion.'
+)
+
+
+def resolve_system_prompt(mode: str) -> str:
+    """Pick the system preset for a conversation mode.
+
+    Tutor conversations swap the default note for the tutor preset;
+    anything unknown answers as the default assistant -- a corrupt
+    value can never silently turn tutoring on.
+    """
+    if mode == Conversation.Mode.TUTOR:
+        return TUTOR_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
+
+
 HISTORY_MESSAGE_LIMIT = 30
 TOOL_ROUNDS_LIMIT = 5
 RETRIEVAL_K = 5
@@ -246,7 +268,10 @@ async def run_agent(
 
         history = await _load_history(conversation, history_limit, exclude_pk=user_message.pk)
         messages = build_messages(
-            system_prompt=SYSTEM_PROMPT, history=history, user_input=user_input, context=kb_context
+            system_prompt=resolve_system_prompt(conversation.mode),
+            history=history,
+            user_input=user_input,
+            context=kb_context,
         )
         tools = reg.tool_schemas()
 

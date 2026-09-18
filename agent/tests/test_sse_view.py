@@ -225,6 +225,60 @@ def test_throttled_session_requests_get_429_and_retry_after(transactional_db, us
     assert second.json()["code"] == "rate_limited"
 
 
+def test_stream_creates_conversation_in_requested_mode(transactional_db, user, monkeypatch):
+    """``mode`` in the body sets a newly created conversation's mode."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+    client = AsyncClient()
+
+    async def _scenario():
+        response = await client.post(
+            SSE_URL,
+            data={"message": "Why is yield low?", "mode": "tutor"},
+            headers={"X-API-Key": raw},
+        )
+        body = b"".join([chunk async for chunk in response.streaming_content])
+        return response, parse_sse(body)
+
+    response, frames = asyncio.run(_scenario())
+
+    assert response.status_code == 200
+    assert frames[0][0] == "status"
+    conversation = Conversation.objects.get()
+    assert conversation.mode == Conversation.Mode.TUTOR
+    assert conversation.messages.filter(role=Message.Role.USER).exists()
+
+
+def test_stream_rejects_unknown_mode_with_400(db, user):
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data={"message": "hi", "mode": "banana"},
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+    assert "mode" in response.json()["error"]
+    assert Conversation.objects.count() == 0
+
+
+def test_stream_body_mode_does_not_override_persisted_conversation(db, user):
+    """``mode`` is creation-only; an existing conversation's mode rules."""
+    conversation = Conversation.objects.create(user=user)  # assistant mode
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    Client().post(
+        SSE_URL,
+        data={"message": "hi", "conversation_id": conversation.pk, "mode": "tutor"},
+        HTTP_X_API_KEY=raw,
+    )
+
+    conversation.refresh_from_db()
+    assert conversation.mode == Conversation.Mode.ASSISTANT
+
+
 @override_settings(REST_FRAMEWORK=throttle_settings(api_key_standard="1/hour"))
 def test_throttled_api_key_requests_get_429(db, user):
     cache.clear()

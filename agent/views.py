@@ -3,7 +3,14 @@ import time
 from typing import Any
 
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpRequest, HttpResponse, StreamingHttpResponse
+from django.http import (
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBadRequest,
+    JsonResponse,
+    StreamingHttpResponse,
+)
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -86,8 +93,11 @@ class AgentStreamView(APIView):
     Retry-After through the JSON error contract.
 
     Body: ``{"message": "...", "conversation_id": <optional pk>}``
-    (the legacy ``query`` field is accepted too). The response streams
-    ``event: <type>`` / ``data: <json>`` frames for status, delta,
+    (the legacy ``query`` field is accepted too). ``mode`` (optional,
+    ``assistant``|``tutor``) sets a newly created conversation's mode and
+    is honored only at creation -- an existing conversation's persisted
+    mode always rules; the chat-mode endpoint changes it. The response
+    streams ``event: <type>`` / ``data: <json>`` frames for status, delta,
     tool_call, tool_result, sources, done, and error events; failures
     inside the turn are error events, never a broken stream.
     """
@@ -100,6 +110,10 @@ class AgentStreamView(APIView):
         if not user_input:
             raise exceptions.ValidationError('A non-empty message is required.')
 
+        mode = str(request.data.get('mode') or '').strip()
+        if mode and mode not in Conversation.Mode.values:
+            raise exceptions.ValidationError('Unknown mode.')
+
         conversation_id = request.data.get('conversation_id')
         if conversation_id not in (None, ''):
             conversation = get_object_or_404(
@@ -107,7 +121,9 @@ class AgentStreamView(APIView):
             )
         else:
             conversation = Conversation.objects.create(
-                user=request.user, title=user_input[:200]
+                user=request.user,
+                title=user_input[:200],
+                mode=mode or Conversation.Mode.ASSISTANT,
             )
 
         request_id = getattr(request, 'request_id', '')
@@ -206,6 +222,27 @@ def new_conversation(request: HttpRequest) -> HttpResponse:
     title = str(request.POST.get('title') or '').strip()[:200] or 'New conversation'
     conversation = Conversation.objects.create(user=request.user, title=title)
     return redirect(f"{reverse('chat-home')}?c={conversation.pk}")
+
+
+@login_required
+@require_POST
+def set_conversation_mode(request: HttpRequest) -> HttpResponse:
+    """Set the tutor toggle for one of the user's own conversations.
+
+    Body: ``conversation_id`` plus ``mode`` (``assistant`` or ``tutor``);
+    answers JSON with the persisted mode. Foreign conversations 404 and
+    unknown modes 400 -- both are surfaced by the client, never silent.
+    """
+    conversation = get_object_or_404(
+        Conversation.objects.for_user(request.user),
+        pk=_safe_pk(request.POST.get('conversation_id')),
+    )
+    mode = str(request.POST.get('mode') or '').strip()
+    if mode not in Conversation.Mode.values:
+        return HttpResponseBadRequest('Unknown mode.')
+    conversation.mode = mode
+    conversation.save(update_fields=['mode', 'updated_at'])
+    return JsonResponse({'conversation_id': conversation.pk, 'mode': mode})
 
 
 @login_required

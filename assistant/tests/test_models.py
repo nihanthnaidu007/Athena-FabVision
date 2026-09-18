@@ -69,6 +69,7 @@ class ModelDefaultsTests(TestCase):
     def test_conversation_defaults(self):
         conversation = Conversation.objects.create(user=self.user)
         self.assertEqual(conversation.title, 'New conversation')
+        self.assertEqual(conversation.mode, Conversation.Mode.ASSISTANT)
         self.assertEqual(
             list(self.user.conversations.all()), [conversation]
         )

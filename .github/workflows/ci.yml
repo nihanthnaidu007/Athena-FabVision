@@ -9,6 +9,9 @@ on:
 
 permissions:
   contents: read
+  # gitleaks-action's ScanPullRequest lists PR commits on pull_request events;
+  # contents: read alone 403s ("Resource not accessible by integration").
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}

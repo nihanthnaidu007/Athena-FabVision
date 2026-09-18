@@ -18,6 +18,7 @@
      data-upload-url="{% url 'kb-document-upload' %}"
      data-new-chat-url="{% url 'chat-new' %}"
      data-chat-home-url="{% url 'chat-home' %}"
+     data-mode-url="{% url 'chat-mode' %}"
      data-llm-configured="{% if llm_configured %}true{% else %}false{% endif %}">
     <aside class="sidebar">
         <div class="brand">
@@ -37,6 +38,9 @@
                  data-conversation-item="{{ item.conversation.pk }}">
                 <a class="conversation-link" href="{% url 'chat-home' %}?c={{ item.conversation.pk }}"
                    title="{{ item.conversation.title }}">{{ item.conversation.title }}</a>
+                {% if item.conversation.mode == 'tutor' %}
+                <span class="mode-badge" data-mode-badge title="Tutor mode">tutor</span>
+                {% endif %}
                 <form method="post" action="{% url 'chat-delete' item.conversation.pk %}" class="inline"
                       data-confirm="Delete this conversation and its messages?">
                     {% csrf_token %}
@@ -85,6 +89,14 @@
         </div>
         <div class="composer-zone">
             <div class="upload-status" id="upload-status" hidden></div>
+            <div class="composer-tools">
+                <button type="button" id="tutor-toggle" class="tutor-toggle{% if active_conversation and active_conversation.mode == 'tutor' %} on{% endif %}"
+                        aria-pressed="{% if active_conversation and active_conversation.mode == 'tutor' %}true{% else %}false{% endif %}"
+                        title="Tutor mode: Athena guides with hints and questions instead of final answers">
+                    Tutor mode
+                </button>
+                <span class="mode-status" id="mode-status" hidden></span>
+            </div>
             <form id="composer-form" autocomplete="off">
                 <input type="file" id="kb-file-input" accept=".txt,.md,.pdf" hidden>
                 <button type="button" id="upload-button" class="composer-btn"
