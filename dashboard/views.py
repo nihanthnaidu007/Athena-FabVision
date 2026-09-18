@@ -8,19 +8,62 @@ or validation is reimplemented here.
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import login as auth_login
+from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.forms import UserCreationForm
 from django.db.models import Count
-from django.http import HttpRequest, HttpResponse
+from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
 
 from assistant.models import ApiKey, Document, UsageEvent
 from rag.ingestion import reingest_document as reingest_document_service
 
 from .aggregates import chart_bars, parse_days, usage_summary
 from .forms import ApiKeyCreateForm
+from .seed import seed_new_user_knowledge_base
+
+
+class LoginView(auth_views.LoginView):
+    """The stock login view plus the signup toggle for its template.
+
+    The login page links to self-registration only when the deployment
+    allows it, so a private deployment (SIGNUPS_ENABLED=false) shows no
+    dead-end link.
+    """
+
+    def get_context_data(self, **kwargs: object) -> dict:
+        context = super().get_context_data(**kwargs)
+        context['signups_enabled'] = settings.SIGNUPS_ENABLED
+        return context
+
+
+@require_http_methods(['GET', 'POST'])
+def register(request: HttpRequest) -> HttpResponse:
+    """Self-service account creation with a first-run seeded KB (v1.1 #3).
+
+    On by default; a private deployment turns it off with
+    SIGNUPS_ENABLED=false, which removes the route entirely (404) and
+    hides the login-page link. A valid signup creates the account,
+    seeds its knowledge base with the starter documents, and logs the
+    user in, so the product works from the very first visit.
+    """
+    if not settings.SIGNUPS_ENABLED:
+        raise Http404('Registration is not enabled on this deployment.')
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            seed_new_user_knowledge_base(user)
+            auth_login(request, user)
+            return redirect('chat-home')
+    else:
+        form = UserCreationForm()
+    return render(request, 'registration/register.html', {'form': form})
 
 
 @login_required
