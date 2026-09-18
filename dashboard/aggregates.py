@@ -140,6 +140,68 @@ def breakdowns(events, *, days: int, now) -> dict[str, list[dict]]:
     }
 
 
+def _ratio_rows(store: dict[str, dict[str, int]]) -> list[dict]:
+    """Bucket map -> label rows sorted by volume, then label; ``up_ratio`` in percent."""
+    rows = []
+    for label, counts in sorted(
+        store.items(), key=lambda item: (-(item[1]['ups'] + item[1]['downs']), item[0])
+    ):
+        total = counts['ups'] + counts['downs']
+        rows.append(
+            {
+                'label': label,
+                'ups': counts['ups'],
+                'downs': counts['downs'],
+                'total': total,
+                'up_ratio': round(100 * counts['ups'] / total) if total else None,
+            }
+        )
+    return rows
+
+
+def feedback_summary(feedbacks) -> dict:
+    """Aggregate per-message feedback rows into the dashboard's ratio shape.
+
+    ``feedbacks`` are MessageFeedback-like rows with ``value`` and a loaded
+    ``message`` (whose ``conversation`` and ``sources`` are populated).
+    Returns totals plus per-conversation and per-tool rows sorted by
+    volume, then label. Tools are attributed through each message's tool
+    sources, so a thumbs-up on an answer that ran the wafer analyzer
+    counts for it; answers without tool sources feed the conversation
+    rows only.
+    """
+    totals = {'ups': 0, 'downs': 0}
+    conversations: dict[str, dict[str, int]] = {}
+    tools: dict[str, dict[str, int]] = {}
+
+    def bucket(store: dict[str, dict[str, int]], label: str) -> dict[str, int]:
+        return store.setdefault(label, {'ups': 0, 'downs': 0})
+
+    for feedback in feedbacks:
+        message = feedback.message
+        key = 'ups' if feedback.value == 'up' else 'downs'
+        totals[key] += 1
+        conversation = getattr(message, 'conversation', None)
+        title = str(getattr(conversation, 'title', '') or 'Untitled conversation')
+        bucket(conversations, title)[key] += 1
+        for source in getattr(message, 'sources', None) or []:
+            if not isinstance(source, dict) or source.get('kind') != 'tool':
+                continue
+            tool = str(source.get('tool') or '')
+            if tool:
+                bucket(tools, tool)[key] += 1
+
+    total = totals['ups'] + totals['downs']
+    return {
+        'total': total,
+        'ups': totals['ups'],
+        'downs': totals['downs'],
+        'up_ratio': round(100 * totals['ups'] / total) if total else None,
+        'conversations': _ratio_rows(conversations),
+        'tools': _ratio_rows(tools),
+    }
+
+
 def chart_bars(daily, *, width=560, height=180, pad=24, label_pad=20) -> dict:
     """Map a daily series onto inline-SVG bar geometry (no chart library).
 

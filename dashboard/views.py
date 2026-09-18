@@ -20,10 +20,10 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods, require_POST
 
-from assistant.models import ApiKey, Document, UsageEvent
+from assistant.models import ApiKey, Document, MessageFeedback, UsageEvent
 from rag.ingestion import reingest_document as reingest_document_service
 
-from .aggregates import breakdowns, chart_bars, parse_days, usage_summary
+from .aggregates import breakdowns, chart_bars, feedback_summary, parse_days, usage_summary
 from .forms import ApiKeyCreateForm
 from .seed import seed_new_user_knowledge_base
 
@@ -77,6 +77,13 @@ def usage_view(request: HttpRequest) -> HttpResponse:
         .order_by('created_at')
     )
     summary = usage_summary(events, days=days, now=timezone.now())
+    # Same window as the usage events: the feedback section answers "how
+    # is this window's answering doing", not all-time sentiment.
+    feedbacks = list(
+        MessageFeedback.objects.for_user(request.user)
+        .filter(created_at__gte=since)
+        .select_related('message__conversation')
+    )
     return render(
         request,
         'dashboard/usage.html',
@@ -84,6 +91,7 @@ def usage_view(request: HttpRequest) -> HttpResponse:
             'summary': summary,
             'breakdowns': breakdowns(events, days=days, now=timezone.now()),
             'chart': chart_bars(summary['daily']),
+            'feedback': feedback_summary(feedbacks),
             'window': days,
             'windows': (7, 30),
         },

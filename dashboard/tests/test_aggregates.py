@@ -10,6 +10,7 @@ from dashboard.aggregates import (
     breakdowns,
     chart_bars,
     daily_series,
+    feedback_summary,
     p95,
     parse_days,
     usage_summary,
@@ -192,3 +193,74 @@ class ChartBarsTests(TestCase):
         chart = chart_bars(daily)
         self.assertEqual(chart['max_calls'], 1)
         self.assertEqual(chart['bars'][0]['h'], 0)
+
+
+def fb(*, value, conversation_title='Conv', tools=()):
+    """A MessageFeedback-shaped stand-in: value + message with conversation/sources."""
+    return SimpleNamespace(
+        value=value,
+        message=SimpleNamespace(
+            conversation=SimpleNamespace(title=conversation_title),
+            sources=[{'kind': 'tool', 'tool': tool} for tool in tools],
+        ),
+    )
+
+
+class FeedbackSummaryTests(TestCase):
+    """feedback_summary: totals, ratios, and tool attribution (no database)."""
+
+    def test_empty_feedback_has_zero_totals_and_no_rows(self):
+        self.assertEqual(
+            feedback_summary([]),
+            {
+                'total': 0,
+                'ups': 0,
+                'downs': 0,
+                'up_ratio': None,
+                'conversations': [],
+                'tools': [],
+            },
+        )
+
+    def test_totals_and_overall_ratio(self):
+        summary = feedback_summary([fb(value='up'), fb(value='up'), fb(value='down')])
+        self.assertEqual(summary['total'], 3)
+        self.assertEqual(summary['ups'], 2)
+        self.assertEqual(summary['downs'], 1)
+        self.assertEqual(summary['up_ratio'], 67)  # round(2/3 * 100)
+
+    def test_conversation_rows_sort_by_volume_then_label(self):
+        summary = feedback_summary(
+            [
+                fb(value='up', conversation_title='Lithography'),
+                fb(value='down', conversation_title='Etch'),
+                fb(value='down', conversation_title='Etch'),
+            ]
+        )
+        rows = summary['conversations']
+        self.assertEqual([row['label'] for row in rows], ['Etch', 'Lithography'])
+        self.assertEqual(
+            rows[0], {'label': 'Etch', 'ups': 0, 'downs': 2, 'total': 2, 'up_ratio': 0}
+        )
+        self.assertEqual(
+            rows[1], {'label': 'Lithography', 'ups': 1, 'downs': 0, 'total': 1, 'up_ratio': 100}
+        )
+
+    def test_tool_rows_attribute_through_message_sources(self):
+        summary = feedback_summary(
+            [
+                fb(value='up', tools=['wafer_map']),
+                fb(value='down', tools=['wafer_map', 'kb_search']),
+            ]
+        )
+        tools = {row['label']: row for row in summary['tools']}
+        self.assertEqual(tools['wafer_map']['ups'], 1)
+        self.assertEqual(tools['wafer_map']['downs'], 1)
+        self.assertEqual(tools['kb_search']['downs'], 1)
+        # The conversation row still counts each answer exactly once.
+        self.assertEqual(summary['conversations'][0]['total'], 2)
+
+    def test_feedback_without_tool_sources_feeds_only_conversations(self):
+        summary = feedback_summary([fb(value='up', tools=[])])
+        self.assertEqual(summary['tools'], [])
+        self.assertEqual(summary['conversations'][0]['ups'], 1)
