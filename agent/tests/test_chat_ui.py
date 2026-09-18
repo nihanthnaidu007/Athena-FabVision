@@ -163,7 +163,12 @@ def test_sources_payload_embeds_citation_fields(client, user):
 
 
 def test_tool_blocks_payload_embeds_wafer_fields(client, user):
-    """Tool cards hydrate from the persisted tool_blocks JSON (contract blocks)."""
+    """Tool cards hydrate from the persisted tool_blocks JSON (contract blocks).
+
+    The v1.1 die-grid keys (``dies``/``dies_omitted``) are additive: they
+    round-trip through the json_script payload beside the original
+    aggregates, which keep their exact values (old consumers unaffected).
+    """
     conversation = make_conversation(user)
     block = {
         "type": "wafer_map",
@@ -178,6 +183,12 @@ def test_tool_blocks_payload_embeds_wafer_fields(client, user):
         "center_hotspot_score": None,
         "patterns": ["edge_ring"],
         "issues": [],
+        "dies": [
+            {"x": -4, "y": -4, "bin": 1},
+            {"x": -3, "y": -4, "bin": 1},
+            {"x": 4, "y": 3, "bin": 2},
+        ],
+        "dies_omitted": 0,
     }
     add_message(conversation, role=Message.Role.ASSISTANT, content="done", tool_blocks=[block])
     client.force_login(user)
@@ -191,6 +202,13 @@ def test_tool_blocks_payload_embeds_wafer_fields(client, user):
     assert payload[0]["yield_pct"] == 0.9
     assert payload[0]["bin_counts"] == {"1": 90, "2": 10}
     assert payload[0]["edge_ring_score"] == 0.31
+    # Die-grid extension: the lattice the UI heat-grid draws.
+    assert payload[0]["dies"] == [
+        {"x": -4, "y": -4, "bin": 1},
+        {"x": -3, "y": -4, "bin": 1},
+        {"x": 4, "y": 3, "bin": 2},
+    ]
+    assert payload[0]["dies_omitted"] == 0
 
 
 def _json_script_payload(html: str, element_id: str) -> str:
