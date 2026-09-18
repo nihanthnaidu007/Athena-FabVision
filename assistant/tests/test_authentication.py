@@ -13,7 +13,7 @@ from assistant.models import ApiKey
 
 User = get_user_model()
 
-ASK_URL = '/agent/ask/'
+STREAM_URL = '/agent/stream/'
 CONTRACT_KEYS = {'error', 'code', 'request_id'}
 
 
@@ -27,12 +27,15 @@ class ApiKeyAuthenticationTests(TestCase):
         )
 
     def post_query(self, **headers):
-        return self.client.post(ASK_URL, {'query': 'hello'}, headers=headers)
+        # The stream endpoint answers 200 with the SSE content type once
+        # authentication passes (the turn itself may degrade without an
+        # LLM key); every auth failure is still the JSON error contract.
+        return self.client.post(STREAM_URL, {'message': 'hello'}, headers=headers)
 
     def test_valid_key_authenticates_via_x_api_key(self):
         response = self.post_query(**{'X-API-Key': self.raw_key})
         self.assertEqual(response.status_code, 200)
-        self.assertIn('response', response.json())
+        self.assertTrue(response['Content-Type'].startswith('text/event-stream'))
 
     def test_valid_key_authenticates_via_bearer_scheme(self):
         response = self.post_query(Authorization=f'Bearer {self.raw_key}')
@@ -55,7 +58,7 @@ class ApiKeyAuthenticationTests(TestCase):
         self.assertEqual(response['WWW-Authenticate'], 'ApiKey realm="athena"')
 
     def test_get_is_rejected_for_unauthenticated_requests_too(self):
-        response = self.client.get(ASK_URL)
+        response = self.client.get(STREAM_URL)
         self.assertIn(response.status_code, (401, 403))
 
     def test_invalid_key_gets_401_with_json_contract(self):
@@ -86,10 +89,10 @@ class ApiKeyAuthenticationTests(TestCase):
         response = self.post_query(**{'X-API-Key': self.raw_key})
         self.assertEqual(response.status_code, 401)
 
-    def test_missing_query_gets_validation_error_contract(self):
-        response = self.client.post(ASK_URL, {}, headers={'X-API-Key': self.raw_key})
+    def test_missing_message_gets_validation_error_contract(self):
+        response = self.client.post(STREAM_URL, {}, headers={'X-API-Key': self.raw_key})
         self.assertEqual(response.status_code, 400)
         payload = response.json()
         self.assertEqual(set(payload), CONTRACT_KEYS)
         self.assertEqual(payload['code'], 'validation_error')
-        self.assertIn('Query parameter is required', payload['error'])
+        self.assertIn('A non-empty message is required', payload['error'])

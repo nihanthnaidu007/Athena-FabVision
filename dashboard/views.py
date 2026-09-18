@@ -23,7 +23,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from assistant.models import ApiKey, Document, UsageEvent
 from rag.ingestion import reingest_document as reingest_document_service
 
-from .aggregates import chart_bars, parse_days, usage_summary
+from .aggregates import breakdowns, chart_bars, parse_days, usage_summary
 from .forms import ApiKeyCreateForm
 from .seed import seed_new_user_knowledge_base
 
@@ -82,6 +82,7 @@ def usage_view(request: HttpRequest) -> HttpResponse:
         'dashboard/usage.html',
         {
             'summary': summary,
+            'breakdowns': breakdowns(events, days=days, now=timezone.now()),
             'chart': chart_bars(summary['daily']),
             'window': days,
             'windows': (7, 30),

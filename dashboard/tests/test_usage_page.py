@@ -124,7 +124,58 @@ class UsagePageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'No usage recorded in the selected window.')
         self.assertNotContains(response, '<svg class="chart"')
+        # Empty windows render no breakdown tables either.
+        self.assertNotContains(response, '<div class="breakdowns">')
         # With data, the inline SVG bar chart is rendered.
         self.client.force_login(self.alice)
         populated = self.client.get(reverse('dashboard:usage'))
         self.assertContains(populated, '<svg class="chart"')
+
+
+class UsageBreakdownPageTests(TestCase):
+    """The kind/model/tool breakdowns render real groups and stay user-scoped."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user('alice', password='pw12345')
+        cls.bob = User.objects.create_user('bob', password='pw12345')
+        now = timezone.now()
+        for kind, model, tool_name, tokens in [
+            ('chat', 'gpt-4o-mini', '', 100),
+            ('chat', 'gpt-4o-mini', '', 50),
+            ('tool', '', 'wafer_map_analyze', 30),
+            ('api', 'gpt-4o', '', 20),
+        ]:
+            event = UsageEvent.objects.create(
+                user=cls.alice,
+                kind=kind,
+                model=model,
+                tool_name=tool_name,
+                tokens_in=tokens,
+            )
+            UsageEvent.objects.filter(pk=event.pk).update(created_at=now)
+        bob_event = UsageEvent.objects.create(
+            user=cls.bob, kind=UsageEvent.Kind.VOICE, model='whisper', tokens_in=999
+        )
+        UsageEvent.objects.filter(pk=bob_event.pk).update(created_at=now)
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def test_breakdown_tables_render_grouped_rows(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertEqual(response.status_code, 200)
+        breakdowns = response.context['breakdowns']
+        self.assertEqual([row['label'] for row in breakdowns['kind']], ['chat', 'api', 'tool'])
+        self.assertEqual(breakdowns['kind'][0]['calls'], 2)
+        self.assertEqual(breakdowns['model'][0]['label'], 'gpt-4o-mini')
+        self.assertEqual(breakdowns['tool'][1]['label'], 'wafer_map_analyze')
+        page = response.content.decode()
+        self.assertIn('wafer_map_analyze', page)
+        self.assertIn('unspecified', page)  # tool events have no model stamp
+
+    def test_breakdowns_exclude_other_users_events(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertNotContains(response, 'whisper')  # bob's model never surfaces
+        breakdowns = response.context['breakdowns']
+        self.assertNotIn('voice', [row['label'] for row in breakdowns['kind']])

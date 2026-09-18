@@ -1,5 +1,4 @@
 import json
-import time
 from typing import Any
 
 from django.contrib.auth.decorators import login_required
@@ -17,40 +16,32 @@ from django.views.decorators.http import require_POST
 from rest_framework import exceptions
 from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.renderers import JSONRenderer
-from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from assistant.models import ApiKey, Conversation, Message, UsageEvent
-from assistant.usage import record_usage
+from assistant.models import ApiKey, Conversation, Message
+from django_agent.logging_context import get_request_id
 
-from .agent_logic import start_agent
 from .llm import default_client
 from .loop import run_agent
 
 
-class AgentAPIView(APIView):
+def agent_ask_gone(request):
+    """410 for the retired /agent/ask/ joke shim (spec #12 hygiene).
+
+    The legacy endpoint answered canned keyword-routed jokes without the
+    model and metered them as real API usage. Old integrators now get an
+    explicit, explained Gone -- pointing at /agent/stream/ -- instead of
+    a misleading 404 or a fake answer, and no UsageEvent is recorded.
     """
-    API endpoint to handle user queries and return agent responses.
-
-    Authentication and permissions come from the DRF defaults (every
-    API route requires them); a missing query is raised, not returned,
-    so the error body follows the JSON error contract.
-    """
-
-    def post(self, request):
-        query = request.data.get('query')
-        if not query:
-            raise exceptions.ValidationError('Query parameter is required')
-
-        started = time.monotonic()
-        response = start_agent(query)
-        record_usage(
-            user=request.user,
-            kind=UsageEvent.Kind.API,
-            api_key=request.auth if isinstance(request.auth, ApiKey) else None,
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
-        return Response({"response": response})
+    request_id = getattr(request, 'request_id', '') or get_request_id()
+    return JsonResponse(
+        {
+            'error': 'This endpoint was retired; use POST /agent/stream/ for agent turns.',
+            'code': 'endpoint_retired',
+            'request_id': request_id,
+        },
+        status=410,
+    )
 
 
 def agent_home(request):

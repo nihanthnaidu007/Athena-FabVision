@@ -6,19 +6,38 @@ from types import SimpleNamespace
 
 from django.test import TestCase
 
-from dashboard.aggregates import chart_bars, daily_series, p95, parse_days, usage_summary
+from dashboard.aggregates import (
+    breakdowns,
+    chart_bars,
+    daily_series,
+    p95,
+    parse_days,
+    usage_summary,
+)
 
 UTC = dt_timezone.utc
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 
 
-def ev(*, created_at, tokens_in=0, tokens_out=0, latency_ms=0):
+def ev(
+    *,
+    created_at,
+    tokens_in=0,
+    tokens_out=0,
+    latency_ms=0,
+    kind='chat',
+    model='',
+    tool_name='',
+):
     """A UsageEvent-shaped stand-in; aggregates only need these attributes."""
     return SimpleNamespace(
         created_at=created_at,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         latency_ms=latency_ms,
+        kind=kind,
+        model=model,
+        tool_name=tool_name,
     )
 
 
@@ -103,6 +122,59 @@ class UsageSummaryTests(TestCase):
         self.assertEqual(summary['total_calls'], 0)
         self.assertEqual(summary['tokens_in'], 0)
         self.assertEqual(summary['p95_latency_ms'], 0)
+
+
+class BreakdownsTests(TestCase):
+    def test_groups_by_kind_model_and_tool(self):
+        events = [
+            ev(created_at=NOW, tokens_in=10, tokens_out=20, kind='chat', model='gpt-4o-mini'),
+            ev(created_at=NOW, tokens_in=1, tokens_out=2, kind='api', model='gpt-4o-mini'),
+            ev(
+                created_at=NOW,
+                tokens_in=5,
+                tokens_out=5,
+                kind='tool',
+                tool_name='wafer_map_analyze',
+            ),
+        ]
+        result = breakdowns(events, days=7, now=NOW)
+        # Ties break alphabetically, so the equal-call kinds sort by label.
+        self.assertEqual([row['label'] for row in result['kind']], ['api', 'chat', 'tool'])
+        self.assertEqual(result['model'][0]['label'], 'gpt-4o-mini')
+        self.assertEqual(result['model'][0]['calls'], 2)
+        self.assertEqual(result['model'][0]['tokens_in'], 11)
+        self.assertEqual(result['model'][0]['tokens_out'], 22)
+        # 'unspecified' (2 events) outranks the one stamped tool call.
+        self.assertEqual(
+            [row['label'] for row in result['tool']], ['unspecified', 'wafer_map_analyze']
+        )
+        self.assertEqual(result['tool'][1]['calls'], 1)
+
+    def test_blank_fields_group_under_unspecified(self):
+        events = [ev(created_at=NOW, kind='chat')]  # no model, no tool
+        result = breakdowns(events, days=7, now=NOW)
+        self.assertEqual([row['label'] for row in result['model']], ['unspecified'])
+        self.assertEqual([row['label'] for row in result['tool']], ['unspecified'])
+        self.assertEqual(result['model'][0]['calls'], 1)
+
+    def test_events_outside_window_are_ignored(self):
+        events = [
+            ev(created_at=NOW, kind='chat', tokens_in=10),
+            ev(created_at=datetime(2026, 9, 1, tzinfo=UTC), kind='voice', tokens_in=999),
+        ]
+        result = breakdowns(events, days=7, now=NOW)
+        self.assertEqual([row['label'] for row in result['kind']], ['chat'])
+        self.assertEqual(result['kind'][0]['tokens_in'], 10)
+
+    def test_rows_sort_by_calls_descending(self):
+        events = [ev(created_at=NOW, kind='api')] + [ev(created_at=NOW, kind='chat')] * 3
+        result = breakdowns(events, days=7, now=NOW)
+        self.assertEqual([row['label'] for row in result['kind']], ['chat', 'api'])
+        self.assertEqual(result['kind'][0]['calls'], 3)
+
+    def test_empty_window_gives_empty_breakdowns(self):
+        result = breakdowns([], days=7, now=NOW)
+        self.assertEqual(result, {'kind': [], 'model': [], 'tool': []})
 
 
 class ChartBarsTests(TestCase):
