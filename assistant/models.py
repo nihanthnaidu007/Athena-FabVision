@@ -47,10 +47,20 @@ CreatorScopedManager = models.Manager.from_queryset(CreatorScopedQuerySet)
 
 
 class Conversation(models.Model):
+    """A chat thread; ``mode`` picks the agent's system preset."""
+
+    class Mode(models.TextChoices):
+        ASSISTANT = 'assistant'
+        TUTOR = 'tutor'
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='conversations'
     )
     title = models.CharField(max_length=200, blank=True, default='New conversation')
+    # The agent loop resolves this to a system preset at prompt assembly
+    # (agent/loop.py); the chat UI surfaces it as the composer toggle and
+    # sidebar badge.
+    mode = models.CharField(max_length=12, choices=Mode.choices, default=Mode.ASSISTANT)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

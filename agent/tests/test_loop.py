@@ -15,7 +15,12 @@ import pytest
 from django.contrib.auth.models import User
 
 from agent import loop as loop_module
-from agent.loop import SYSTEM_PROMPT, run_agent
+from agent.loop import (
+    SYSTEM_PROMPT,
+    TUTOR_SYSTEM_PROMPT,
+    resolve_system_prompt,
+    run_agent,
+)
 from agent.registry import ToolRegistry
 from assistant.models import Conversation, Message, UsageEvent
 
@@ -457,3 +462,78 @@ def test_abort_preserves_partial_text(transactional_db, user, conversation):
 def test_system_prompt_is_fab_domain_grounded():
     assert "semiconductor" in SYSTEM_PROMPT
     assert "cite" in SYSTEM_PROMPT
+
+
+def test_tutor_preset_tutors_and_keeps_grounding():
+    assert "semiconductor" in TUTOR_SYSTEM_PROMPT
+    assert "cite" in TUTOR_SYSTEM_PROMPT
+    assert "Never give the final answer" in TUTOR_SYSTEM_PROMPT
+    assert "guiding" in TUTOR_SYSTEM_PROMPT
+
+
+def test_resolve_system_prompt_swaps_only_for_tutor_mode():
+    assert resolve_system_prompt(Conversation.Mode.ASSISTANT) is SYSTEM_PROMPT
+    assert resolve_system_prompt(Conversation.Mode.TUTOR) is TUTOR_SYSTEM_PROMPT
+    # Unknown or blank values degrade to the default assistant behavior.
+    assert resolve_system_prompt("") is SYSTEM_PROMPT
+    assert resolve_system_prompt("garbage") is SYSTEM_PROMPT
+
+
+@async_test
+async def test_tutor_conversation_builds_prompt_from_tutor_preset(db, user, conversation):
+    conversation.mode = Conversation.Mode.TUTOR
+    fake = FakeLLM([[delta("Hint: compare the edge dies first."), usage()]])
+
+    async def _collect():
+        _ = [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input="Why is yield low?",
+                llm=fake,
+                registry=make_registry(),
+            )
+        ]
+
+    await _collect()
+
+    prompt_messages = fake.calls[0]["messages"]
+    assert prompt_messages[0]["role"] == "system"
+    assert prompt_messages[0]["content"] == TUTOR_SYSTEM_PROMPT
+    assert prompt_messages[0]["content"] != SYSTEM_PROMPT
+
+
+@async_test
+async def test_assistant_conversation_keeps_default_preset(db, user, conversation):
+    fake = FakeLLM([[delta("Answer."), usage()]])
+
+    async def _collect():
+        _ = [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input="Why is yield low?",
+                llm=fake,
+                registry=make_registry(),
+            )
+        ]
+
+    await _collect()
+
+    assert fake.calls[0]["messages"][0]["content"] == SYSTEM_PROMPT
+
+
+def test_tutor_turn_persists_like_any_turn(transactional_db, user, conversation):
+    """Tutor mode swaps the preset, not the loop contract."""
+    conversation.mode = Conversation.Mode.TUTOR
+
+    asyncio.run(run_turn([[delta("Hint: check the edge ring."), usage()]], user, conversation))
+
+    contents = list(conversation.messages.values_list("role", "content"))
+    assert contents == [
+        ("user", "Analyze wafer w1"),
+        ("assistant", "Hint: check the edge ring."),
+    ]
+    assert UsageEvent.objects.count() == 1
