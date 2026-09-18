@@ -6,6 +6,7 @@ from .views import (
     agent_home,
     delete_conversation,
     new_conversation,
+    set_conversation_mode,
 )
 
 urlpatterns = [
@@ -13,5 +14,6 @@ urlpatterns = [
     path('ask/', AgentAPIView.as_view(), name='ask-agent'),  # API endpoint
     path('stream/', AgentStreamView.as_view(), name='agent-stream'),  # SSE streaming
     path('chat/new/', new_conversation, name='chat-new'),
+    path('chat/mode/', set_conversation_mode, name='chat-mode'),
     path('chat/<int:pk>/delete/', delete_conversation, name='chat-delete'),
 ]

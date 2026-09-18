@@ -29,7 +29,13 @@ Session-authenticated (non-GET) requests must send the CSRF token in the
 
 One agent turn as a `text/event-stream`. Body: `{"message": "...",
 "conversation_id": <optional id>}` (continues that conversation when given,
-starts a new one otherwise).
+starts a new one otherwise). `mode` (optional, `"assistant"` or `"tutor"`)
+sets a *newly created* conversation's mode; an existing conversation's
+persisted mode always rules — `POST /agent/chat/mode/` with form fields
+`conversation_id` and `mode` changes it (session login or API key
+required; form-encoded like the other chat CRUD routes). A tutor
+conversation responds with hints and guiding questions instead of final
+answers.
 
 ```bash
 curl -N -b cookies.txt \

@@ -291,12 +291,20 @@
         var fileInput = $('#kb-file-input');
         var uploadStatus = $('#upload-status');
         var conversationList = $('#conversation-list');
+        var tutorToggle = $('#tutor-toggle');
+        var modeStatus = $('#mode-status');
 
         var state = {
             conversationId: root.getAttribute('data-conversation-id') || '',
             streamUrl: root.getAttribute('data-stream-url'),
             uploadUrl: root.getAttribute('data-upload-url'),
             chatHomeUrl: root.getAttribute('data-chat-home-url'),
+            modeUrl: root.getAttribute('data-mode-url') || '',
+            // The server renders the active conversation's mode; a fresh
+            // page starts in assistant mode until the student toggles.
+            mode: tutorToggle && tutorToggle.getAttribute('aria-pressed') === 'true'
+                ? 'tutor'
+                : 'assistant',
             controller: null,
             streaming: false
         };
@@ -314,6 +322,7 @@
             sendButton.disabled = streaming;
             input.disabled = streaming;
             uploadButton.disabled = streaming;
+            tutorToggle.disabled = streaming;
             stopButton.hidden = !streaming;
         }
 
@@ -433,20 +442,42 @@
             );
         }
 
-        function addSidebarConversation(id, title) {
+        function modeBadge() {
+            var badge = el('span', 'mode-badge');
+            badge.setAttribute('data-mode-badge', '');
+            badge.setAttribute('title', 'Tutor mode');
+            badge.textContent = 'tutor';
+            return badge;
+        }
+
+        function addSidebarConversation(id, title, mode) {
             if (sidebarConversationExists(id)) return;
             var item = el('div', 'conversation-item');
             item.setAttribute('data-conversation-item', id);
             var link = el('a', 'conversation-link', title || 'New conversation');
             link.href = state.chatHomeUrl + '?c=' + id;
             item.appendChild(link);
+            if (mode === 'tutor') item.appendChild(modeBadge());
             conversationList.prepend(item);
+        }
+
+        function updateSidebarBadge(id, mode) {
+            var item = conversationList.querySelector('[data-conversation-item="' + id + '"]');
+            if (!item) return;
+            var existing = item.querySelector('[data-mode-badge]');
+            if (mode === 'tutor' && !existing) {
+                var deleteForm = item.querySelector('form');
+                if (deleteForm) item.insertBefore(modeBadge(), deleteForm);
+                else item.appendChild(modeBadge());
+            } else if (mode !== 'tutor' && existing) {
+                existing.remove();
+            }
         }
 
         function setConversation(id, title) {
             state.conversationId = String(id);
             root.setAttribute('data-conversation-id', state.conversationId);
-            addSidebarConversation(id, title);
+            addSidebarConversation(id, title, state.mode);
             var nextUrl = state.chatHomeUrl + '?c=' + id;
             if (window.history && window.history.replaceState) {
                 window.history.replaceState(null, '', nextUrl);
@@ -516,7 +547,10 @@
                 },
                 body: JSON.stringify({
                     message: text,
-                    conversation_id: state.conversationId ? Number(state.conversationId) : undefined
+                    conversation_id: state.conversationId ? Number(state.conversationId) : undefined,
+                    // Creation-time only: an existing conversation's persisted
+                    // mode rules, changed through the mode endpoint.
+                    mode: state.conversationId ? undefined : state.mode
                 }),
                 signal: controller.signal
             }).then(function (response) {
@@ -621,6 +655,54 @@
             xhr.send(formData);
         }
 
+        // ----- tutor mode (per-conversation preset) -----
+
+        function renderModeToggle() {
+            var tutor = state.mode === 'tutor';
+            tutorToggle.setAttribute('aria-pressed', tutor ? 'true' : 'false');
+            tutorToggle.classList.toggle('on', tutor);
+        }
+
+        function setModeStatus(message) {
+            if (message) {
+                modeStatus.textContent = message;
+                modeStatus.hidden = false;
+            } else {
+                modeStatus.hidden = true;
+                modeStatus.textContent = '';
+            }
+        }
+
+        function applyMode(next, persist) {
+            var previous = state.mode;
+            state.mode = next;
+            renderModeToggle();
+            if (!persist) return;
+            if (state.conversationId) {
+                var body = new FormData();
+                body.append('conversation_id', state.conversationId);
+                body.append('mode', next);
+                fetch(state.modeUrl, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': csrf },
+                    body: body
+                }).then(function (response) {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.json();
+                }).then(function (payload) {
+                    updateSidebarBadge(String(payload.conversation_id), payload.mode);
+                    setModeStatus('');
+                }).catch(function () {
+                    // Honest failure: revert the toggle and say what happened.
+                    state.mode = previous;
+                    renderModeToggle();
+                    setModeStatus('Could not save tutor mode — try again.');
+                });
+            }
+            // No conversation yet: the mode rides the next stream request
+            // and is persisted when the conversation is created.
+        }
+
         // ----- wiring -----
 
         form.addEventListener('submit', function (event) {
@@ -646,6 +728,11 @@
 
         stopButton.addEventListener('click', function () {
             if (state.controller) state.controller.abort();
+        });
+
+        tutorToggle.addEventListener('click', function () {
+            if (state.streaming) return;
+            applyMode(state.mode === 'tutor' ? 'assistant' : 'tutor', true);
         });
 
         uploadButton.addEventListener('click', function () { fileInput.click(); });

@@ -10,6 +10,7 @@ manual browser smoke documented in the PR.
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 import pytest
@@ -62,6 +63,7 @@ def test_chat_home_renders_client_contract(client, user):
     assert 'data-stream-url="/agent/stream/"' in html
     assert 'data-upload-url="/kb/documents/"' in html
     assert 'data-new-chat-url="/agent/chat/new/"' in html
+    assert 'data-mode-url="/agent/chat/mode/"' in html
     assert 'id="composer-form"' in html
     assert 'id="stop-button"' in html
     assert 'id="kb-file-input"' in html
@@ -310,3 +312,143 @@ def test_thread_empty_state_for_new_conversation(client, user):
     html = response.content.decode()
     assert "data-thread-empty" in html
     assert "Start the conversation" in html
+
+
+# --- Tutor mode (spec #7): composer toggle, sidebar badge, mode endpoint ---
+
+
+def _composer_toggle_state(html: str) -> str:
+    """The rendered aria-pressed value of the single tutor toggle."""
+    match = re.search(r'id="tutor-toggle"[^>]*aria-pressed="([^"]+)"', html)
+    assert match, "the tutor toggle must render with an aria-pressed state"
+    return match.group(1)
+
+
+def _sidebar_item_after_link(html: str, title: str) -> str:
+    """The conversation-item markup following the sidebar link for ``title``."""
+    marker = f">{title}</a>"
+    start = html.index(marker) + len(marker)
+    return html[start : html.index("</div>", start)]
+
+
+def make_tutor_conversation(user: User, title: str = "tutor conv") -> Conversation:
+    conversation = make_conversation(user, title=title)
+    Conversation.objects.filter(pk=conversation.pk).update(mode=Conversation.Mode.TUTOR)
+    conversation.refresh_from_db()
+    return conversation
+
+
+def test_composer_toggle_reflects_active_tutor_conversation(client, user):
+    conversation = make_tutor_conversation(user, title="Litho office hours")
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert _composer_toggle_state(html) == "true"
+    assert 'class="tutor-toggle on"' in html
+
+
+def test_composer_toggle_defaults_off_without_tutor_mode(client, user):
+    make_conversation(user)
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert _composer_toggle_state(html) == "false"
+    assert "tutor-toggle on" not in html
+
+
+def test_tutor_conversations_are_badged_in_sidebar(client, user):
+    make_tutor_conversation(user, title="Litho office hours")
+    make_conversation(user, title="Regular chat")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert "mode-badge" in _sidebar_item_after_link(html, "Litho office hours")
+    assert "mode-badge" not in _sidebar_item_after_link(html, "Regular chat")
+
+
+def test_set_conversation_mode_persists_and_answers_json(client, user):
+    conversation = make_conversation(user)
+    assert conversation.mode == Conversation.Mode.ASSISTANT  # model default
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-mode"),
+        data={"conversation_id": conversation.pk, "mode": "tutor"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"conversation_id": conversation.pk, "mode": "tutor"}
+    conversation.refresh_from_db()
+    assert conversation.mode == Conversation.Mode.TUTOR
+
+    back = client.post(
+        reverse("chat-mode"),
+        data={"conversation_id": conversation.pk, "mode": "assistant"},
+    )
+    assert back.status_code == 200
+    conversation.refresh_from_db()
+    assert conversation.mode == Conversation.Mode.ASSISTANT
+
+
+def test_set_mode_foreign_conversation_is_404(client, user, other_user):
+    foreign = make_conversation(other_user, title="not yours")
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-mode"),
+        data={"conversation_id": foreign.pk, "mode": "tutor"},
+    )
+
+    assert response.status_code == 404
+    foreign.refresh_from_db()
+    assert foreign.mode == Conversation.Mode.ASSISTANT
+
+
+def test_set_mode_malformed_conversation_id_is_404(client, user):
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-mode"),
+        data={"conversation_id": "not-a-number", "mode": "tutor"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_set_mode_unknown_value_is_400(client, user):
+    conversation = make_conversation(user)
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-mode"),
+        data={"conversation_id": conversation.pk, "mode": "banana"},
+    )
+
+    assert response.status_code == 400
+    conversation.refresh_from_db()
+    assert conversation.mode == Conversation.Mode.ASSISTANT
+
+
+def test_set_mode_requires_login(client, db):
+    # login_required wraps require_POST, so anonymous requests redirect
+    # before the method check ever runs.
+    post_response = client.post(
+        reverse("chat-mode"), data={"conversation_id": "1", "mode": "tutor"}
+    )
+    assert post_response.status_code == 302
+    assert "/dashboard/accounts/login/" in post_response["Location"]
+    assert Conversation.objects.count() == 0
+
+
+def test_set_mode_requires_post(client, user):
+    client.force_login(user)
+
+    get_response = client.get(reverse("chat-mode"))
+
+    assert get_response.status_code == 405  # require_POST
