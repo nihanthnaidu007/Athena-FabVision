@@ -20,6 +20,12 @@ the region holds enough dies to mean anything (``MIN_RING_DIES`` /
 ``MIN_CENTER_DIES``); regions too small to evaluate are reported in
 ``issues`` rather than silently scored as zero.
 
+The block also embeds the per-die lattice it already computed (``dies``:
+``x``/``y``/``bin`` triplets, canonical order) so the chat UI can draw the
+die-grid heat map; grids above ``MAX_DIE_POINTS`` downsample by an integer
+stride and report the dropped count in ``dies_omitted``. These keys are
+additive -- consumers reading only the aggregates are unaffected.
+
 Malformed input never raises to the caller: every failure returns the
 structured ``{"type": "error"}`` block naming what was wrong and where.
 """
@@ -42,6 +48,13 @@ EDGE_RING_RADIUS_FRACTION = 0.9  # outer band = outer 10% of the radius
 CENTER_RADIUS_FRACTION = 0.25    # hotspot region = inner quarter radius
 MIN_RING_DIES = 8                # below this the outer band is too sparse to judge
 MIN_CENTER_DIES = 4
+
+# Per-die payload cap: the block embeds the die lattice so the chat UI can
+# draw the heat-grid. Grids above this size downsample by an integer stride
+# anchored at the lattice minimum (a 200x200 map lands at ~2500 points and
+# keeps its shape); smaller grids pass through untouched. ``dies_omitted``
+# carries the honest count of what the stride dropped.
+MAX_DIE_POINTS = 2500
 
 ErrorBlock = dict[str, Any]
 
@@ -153,6 +166,30 @@ def _region_score(
     return _fail_rate(region) - baseline_fail_rate
 
 
+def _die_grid_payload(rows: list[dict[str, Any]]) -> tuple[list[dict[str, int]], int]:
+    """Canonical per-die lattice (x, y, bin) plus the count the stride dropped.
+
+    Sorted by (y, x) so payload order is deterministic regardless of CSV row
+    order. Grids above ``MAX_DIE_POINTS`` downsample by an integer stride over
+    the coordinate lattice, which preserves spatial structure and the wafer
+    outline; only ``x``/``y``/``bin`` are exposed (analysis scratch fields
+    such as ``distance`` never leak into the payload).
+    """
+    if not rows:
+        return [], 0
+    dies = [{'x': row['x'], 'y': row['y'], 'bin': row['bin']} for row in rows]
+    if len(dies) > MAX_DIE_POINTS:
+        stride = math.ceil(math.sqrt(len(dies) / MAX_DIE_POINTS))
+        min_x = min(die['x'] for die in dies)
+        min_y = min(die['y'] for die in dies)
+        dies = [
+            die for die in dies
+            if (die['x'] - min_x) % stride == 0 and (die['y'] - min_y) % stride == 0
+        ]
+    dies.sort(key=lambda die: (die['y'], die['x']))
+    return dies, len(rows) - len(dies)
+
+
 def analyze_wafer_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute the wafer_map block from parsed rows. Pure and deterministic."""
     total = len(rows)
@@ -200,6 +237,7 @@ def analyze_wafer_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     bin_counts = {str(code): bin_tallies[code] for code in sorted(bin_tallies)}
 
     pattern_text = ', '.join(patterns) if patterns else 'none'
+    dies, dies_omitted = _die_grid_payload(rows)
     return {
         'type': 'wafer_map',
         'title': 'Wafer map analysis',
@@ -215,6 +253,10 @@ def analyze_wafer_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         'patterns': patterns,
         'issues': issues,
+        # Per-die lattice for the UI heat-grid; additive keys the original
+        # aggregates-based consumers ignore (spec: v1.1 feature 1).
+        'dies': dies,
+        'dies_omitted': dies_omitted,
     }
 
 
