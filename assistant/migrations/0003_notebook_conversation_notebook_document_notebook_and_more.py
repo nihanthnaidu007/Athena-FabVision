@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('assistant', '0001_initial'),
+        ('assistant', '0002_conversation_mode'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

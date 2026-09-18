@@ -200,7 +200,7 @@ def test_usage_recorded_with_tokens_latency_and_fks(transactional_db, user, conv
 def test_retrieval_sources_flow_to_event_and_persisted_message(
     transactional_db, user, conversation
 ):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -241,7 +241,7 @@ def test_retrieval_sources_flow_to_event_and_persisted_message(
 
 @async_test
 async def test_async_retrieval_source_supported(db, user, conversation):
-    async def retrieve(user, query, k=5):
+    async def retrieve(user, query, k=5, notebook_id=None):
         return [
             {"document_id": 1, "chunk_id": 2, "title": "Async doc", "snippet": "s", "score": 0.5}
         ]
@@ -253,7 +253,7 @@ async def test_async_retrieval_source_supported(db, user, conversation):
 
 @async_test
 async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -288,7 +288,7 @@ async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
 
 @async_test
 async def test_retrieval_failure_degrades_to_empty_context(db, user, conversation):
-    def broken_retrieve(user, query, k=5):
+    def broken_retrieve(user, query, k=5, notebook_id=None):
         raise RuntimeError("embedding service down")
 
     events = await run_turn(
@@ -300,6 +300,35 @@ async def test_retrieval_failure_degrades_to_empty_context(db, user, conversatio
 
     assert event_types(events)[-3:] == ["sources", "turn_saved", "done"]
     assert next(e for e in events if e.type == "sources").data["sources"] == []
+
+
+@async_test
+async def test_notebook_id_is_forwarded_to_retrieval_source(db, user, conversation):
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn(
+        [[delta("ok."), usage()]], user, conversation, retrieve=retrieve, notebook_id=17
+    )
+
+    assert captured["notebook_id"] == 17
+
+
+@async_test
+async def test_retrieval_without_notebook_receives_none_whole_kb(db, user, conversation):
+    """Regression pin: an unscoped turn retrieves exactly as before v1.1."""
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn([[delta("ok."), usage()]], user, conversation, retrieve=retrieve)
+
+    assert captured["notebook_id"] is None
 
 
 def test_history_is_sent_oldest_first_before_new_turn(transactional_db, user, conversation):
