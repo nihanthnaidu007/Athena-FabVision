@@ -164,6 +164,176 @@
         return card;
     }
 
+    function renderSpcChartBlock(block) {
+        var card = el('div', 'tool-card spc-card');
+        card.appendChild(el('div', 'tool-card-title', block.title || 'SPC control-chart check'));
+        if (block.summary) card.appendChild(el('div', 'tool-card-summary', block.summary));
+
+        function fmt(value, digits) {
+            var num = Number(value);
+            return isNaN(num) ? 'n/a' : num.toFixed(digits === undefined ? 2 : digits);
+        }
+
+        var hasLimits = typeof block.ucl === 'number' && typeof block.lcl === 'number';
+        var sigmaLabel = block.sigma_source === 'provided' ? 'known' : 'estimated';
+        var grid = el('div', 'spc-grid');
+        function stat(label, value) {
+            var cell = el('div', 'spc-stat');
+            cell.appendChild(el('div', 'spc-stat-value', value));
+            cell.appendChild(el('div', 'spc-stat-label', label));
+            return cell;
+        }
+        grid.appendChild(stat('Mean', fmt(block.mean)));
+        grid.appendChild(stat('Sigma (' + sigmaLabel + ')', fmt(block.sigma)));
+        grid.appendChild(stat('UCL', hasLimits ? fmt(block.ucl) : 'n/a'));
+        grid.appendChild(stat('LCL', hasLimits ? fmt(block.lcl) : 'n/a'));
+        grid.appendChild(stat('Verdict', block.verdict === 'out_of_control' ? 'OUT OF CONTROL' : 'in control'));
+        card.appendChild(grid);
+
+        var values = Array.isArray(block.values) ? block.values : [];
+        var flags = Array.isArray(block.point_flags) ? block.point_flags : [];
+        if (values.length > 1 && hasLimits) {
+            card.appendChild(spcRunChart(values, flags, block));
+        } else if (values.length) {
+            card.appendChild(el('div', 'muted small',
+                'No control chart drawn: ' + (hasLimits
+                    ? 'the series needs at least 2 points.'
+                    : 'the limits are indeterminate for this series.')));
+        }
+
+        var violations = block.violations || [];
+        if (violations.length) {
+            var vList = el('ul', 'spc-violations');
+            violations.forEach(function (violation) {
+                var item = el('li');
+                item.appendChild(el('div', 'spc-violation-label', violation.label || violation.rule || 'Rule violation'));
+                if (violation.detail) item.appendChild(el('div', 'spc-violation-detail', violation.detail));
+                vList.appendChild(item);
+            });
+            card.appendChild(vList);
+        } else if (values.length) {
+            card.appendChild(el('div', 'muted small', 'No Nelson-rule violations detected.'));
+        }
+
+        var issues = block.issues || [];
+        if (issues.length) {
+            var issueList = el('ul', 'spc-issues');
+            issues.forEach(function (issue) {
+                issueList.appendChild(el('li', null, issue));
+            });
+            card.appendChild(issueList);
+        }
+
+        var references = block.references || [];
+        if (references.length) {
+            var refBox = el('div', 'spc-references');
+            references.forEach(function (reference) {
+                refBox.appendChild(el('div', 'spc-reference', 'Reference: ' + reference));
+            });
+            card.appendChild(refBox);
+        }
+        return card;
+    }
+
+    // SVG run chart for the spc_chart block: series line, dashed UCL/center/LCL
+    // guides, and highlighted markers on points that violate a Nelson rule.
+    function spcRunChart(values, flags, block) {
+        var svgNs = 'http://www.w3.org/2000/svg';
+        var width = 720, height = 240;
+        var margin = { left: 52, right: 14, top: 12, bottom: 24 };
+        var plotWidth = width - margin.left - margin.right;
+        var plotHeight = height - margin.top - margin.bottom;
+
+        function svgNode(tag, attrs) {
+            var node = document.createElementNS(svgNs, tag);
+            Object.keys(attrs || {}).forEach(function (key) {
+                node.setAttribute(key, String(attrs[key]));
+            });
+            return node;
+        }
+
+        var ucl = Number(block.ucl), lcl = Number(block.lcl), mean = Number(block.mean);
+        var sigma = Number(block.sigma);
+        var low = Math.min(lcl, Math.min.apply(null, values));
+        var high = Math.max(ucl, Math.max.apply(null, values));
+        if (!isFinite(low) || !isFinite(high)) { low = 0; high = 1; }
+        if (high === low) { high += 1; low -= 1; }
+        var pad = (high - low) * 0.08;
+        low -= pad; high += pad;
+
+        function xPixel(index) {
+            return values.length === 1
+                ? margin.left + plotWidth / 2
+                : margin.left + (plotWidth * index) / (values.length - 1);
+        }
+        function yPixel(value) {
+            return margin.top + plotHeight * (1 - (value - low) / (high - low));
+        }
+
+        var svg = svgNode('svg', {
+            viewBox: '0 0 ' + width + ' ' + height,
+            class: 'spc-chart',
+            role: 'img',
+            'aria-label': 'SPC run chart of ' + values.length + ' points with control limits'
+        });
+
+        // limit guides first, so the series paints on top
+        function guide(value, cssClass, label) {
+            if (!isFinite(value)) return;
+            var y = yPixel(value);
+            svg.appendChild(svgNode('line', {
+                x1: margin.left, x2: width - margin.right, y1: y, y2: y,
+                class: cssClass
+            }));
+            var text = svgNode('text', {
+                x: margin.left - 6, y: y + 3.5,
+                class: 'spc-chart-guide-label', 'text-anchor': 'end'
+            });
+            text.textContent = label;
+            svg.appendChild(text);
+        }
+        guide(ucl, 'spc-chart-limit', 'UCL ' + fmt(ucl));
+        guide(mean, 'spc-chart-center', 'x̄ ' + fmt(mean));
+        guide(lcl, 'spc-chart-limit', 'LCL ' + fmt(lcl));
+
+        var points = values.map(function (value, index) {
+            return xPixel(index) + ',' + yPixel(value);
+        }).join(' ');
+        svg.appendChild(svgNode('polyline', {
+            points: points, class: 'spc-chart-line', fill: 'none'
+        }));
+
+        var dotRadius = values.length > 300 ? 1.5 : 3;
+        values.forEach(function (value, index) {
+            var flagged = (flags[index] || []).length > 0;
+            var circle = svgNode('circle', {
+                cx: xPixel(index), cy: yPixel(value), r: dotRadius,
+                class: flagged ? 'spc-chart-point flagged' : 'spc-chart-point'
+            });
+            var zScore = isFinite(sigma) && sigma > 0 ? (value - mean) / sigma : null;
+            var tooltip = svgNode('title');
+            tooltip.textContent = 'point ' + (index + 1) + ' · ' + fmt(value)
+                + (zScore === null ? '' : ' (' + (zScore >= 0 ? '+' : '') + zScore.toFixed(1) + 'σ)')
+                + ((flags[index] || []).length ? ' — ' + flags[index].join(', ') : '');
+            circle.appendChild(tooltip);
+            svg.appendChild(circle);
+        });
+
+        // axis labels: first and last point numbers
+        var firstLabel = svgNode('text', {
+            x: margin.left, y: height - 6, class: 'spc-chart-axis-label'
+        });
+        firstLabel.textContent = '1';
+        var lastLabel = svgNode('text', {
+            x: width - margin.right, y: height - 6,
+            class: 'spc-chart-axis-label', 'text-anchor': 'end'
+        });
+        lastLabel.textContent = String(values.length);
+        svg.appendChild(firstLabel);
+        svg.appendChild(lastLabel);
+        return svg;
+    }
+
     function renderErrorBlock(block) {
         var alert = el('div', 'tool-alert');
         alert.appendChild(el('div', 'tool-alert-title', block.title || 'Tool error'));
@@ -187,6 +357,7 @@
         switch (block.type) {
             case 'table': return renderTableBlock(block);
             case 'wafer_map': return renderWaferBlock(block);
+            case 'spc_chart': return renderSpcChartBlock(block);
             case 'error': return renderErrorBlock(block);
             case 'text': return renderTextBlock(block);
             default:

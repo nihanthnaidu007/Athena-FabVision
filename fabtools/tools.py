@@ -3,7 +3,7 @@
 ``TOOLS`` is a list of ``[name, fn, availability_fn]`` entries. Every ``fn``
 is an async callable ``(user, **kwargs)`` returning a block dict
 ``{type, title, ...}`` where ``type`` is one of ``table | text | wafer_map |
-error``. ``availability_fn`` is a zero-argument predicate consumed before
+spc_chart | error``. ``availability_fn`` is a zero-argument predicate consumed before
 the tool is offered to the model — it must never raise. Consumers import
 this module defensively (try/except ImportError) and feature-gate on the
 availability functions, so the five parallel PRs may merge in any order.
@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from fabtools import excursion, wafer_map
+from fabtools import excursion, spc, wafer_map
 from fabtools.search import WebSearchClient, default_web_search_client
 
 ToolFn = Callable[..., Awaitable[dict[str, Any]]]
@@ -126,6 +126,35 @@ async def excursion_triage(
             f'lot metrics must be a mapping of names to numbers, got {type(metrics).__name__}'
         )
     return excursion.triage_lot(metrics)
+
+
+async def spc_rules_check(
+    user: Any,
+    *,
+    series: Any = None,
+    sigma: Any = None,
+    **kwargs: Any,
+) -> Block:
+    """Check a measurement series against control limits and the Nelson rules.
+
+    ``series`` is the measurement text (CSV/JSON, 2-1000 numbers) or an
+    already-parsed list; ``sigma`` is the optional known process sigma.
+    Deterministic and always available. The model is not guided by a
+    parameter schema, so a few common argument names are tolerated before
+    declaring the input missing. Never raises: invalid input returns the
+    structured error block.
+    """
+    if series is None:
+        for alias in ('values', 'measurements', 'data', 'series_text'):
+            if kwargs.get(alias) is not None:
+                series = kwargs[alias]
+                break
+    if series is None:
+        return spc.error_block(
+            'no measurement series provided: pass series (CSV or JSON numbers, '
+            '2-1000 points) and optionally sigma (the known process sigma)'
+        )
+    return spc.check_series(series, sigma)
 
 
 async def kb_search(
@@ -264,6 +293,7 @@ async def web_search(
 TOOLS: list[tuple[str, ToolFn, AvailabilityFn]] = [
     ('wafer_map_analyze', wafer_map_analyze, _always_available),
     ('excursion_triage', excursion_triage, _always_available),
+    ('spc_rules_check', spc_rules_check, _always_available),
     ('kb_search', kb_search, kb_search_available),
     ('web_search', web_search, web_search_available),
 ]

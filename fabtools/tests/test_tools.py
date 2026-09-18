@@ -50,7 +50,10 @@ class TestRegistryContract:
 
     def test_expected_tool_names_present(self):
         names = {name for name, _fn, _available in tools.TOOLS}
-        assert {'wafer_map_analyze', 'excursion_triage', 'kb_search', 'web_search'} <= names
+        assert {
+            'wafer_map_analyze', 'excursion_triage', 'spc_rules_check',
+            'kb_search', 'web_search',
+        } <= names
 
     def test_tool_functions_are_async(self):
         for _name, fn, _available in tools.TOOLS:
@@ -58,18 +61,19 @@ class TestRegistryContract:
 
     def test_deterministic_tools_are_always_available(self):
         for name, _fn, available in tools.TOOLS:
-            if name in ('wafer_map_analyze', 'excursion_triage'):
+            if name in ('wafer_map_analyze', 'excursion_triage', 'spc_rules_check'):
                 assert available() is True
 
     def test_every_registered_tool_returns_a_contract_block(self):
         blocks = [
             run(tools.wafer_map_analyze(None, csv_content='wafer_id,x,y,bin\nW1,0,0,1\n')),
             run(tools.excursion_triage(None, metrics={'yield_pct': 99})),
+            run(tools.spc_rules_check(None, series='100, 101, 99, 102')),
             run(tools.kb_search(None, query='etch rate')),
             run(tools.web_search(None, query='nitride etch', client=_FakeClient())),
         ]
         for block in blocks:
-            assert block['type'] in {'table', 'text', 'wafer_map', 'error'}
+            assert block['type'] in {'table', 'text', 'wafer_map', 'spc_chart', 'error'}
             assert 'title' in block
 
 
@@ -98,6 +102,35 @@ class TestWaferTool:
         block = run(tools.wafer_map_analyze(None, path=str(tmp_path / 'missing.csv')))
         assert block['type'] == 'error'
         assert block['code'] == 'wafer_csv_unreadable'
+
+
+class TestSpcTool:
+    def test_returns_spc_chart_block_on_valid_series(self):
+        block = run(tools.spc_rules_check(None, series='100, 101, 99, 102'))
+        assert block['type'] == 'spc_chart'
+        assert block['series_length'] == 4
+
+    def test_accepts_list_series(self):
+        block = run(tools.spc_rules_check(None, series=[100.0, 101.0, 99.0, 102.0]))
+        assert block['type'] == 'spc_chart'
+
+    def test_sigma_passthrough_reaches_the_analyzer(self):
+        block = run(tools.spc_rules_check(None, series='100, 101, 99, 102', sigma='2.0'))
+        assert block['sigma_source'] == 'provided'
+
+    def test_tolerates_common_argument_aliases(self):
+        block = run(tools.spc_rules_check(None, values='100, 101, 99, 102'))
+        assert block['type'] == 'spc_chart'
+
+    def test_invalid_series_is_error_block_not_exception(self):
+        block = run(tools.spc_rules_check(None, series='1, 2, oops'))
+        assert block['type'] == 'error'
+        assert block['code'] == 'spc_input_invalid'
+
+    def test_missing_input_is_error_block(self):
+        block = run(tools.spc_rules_check(None))
+        assert block['type'] == 'error'
+        assert 'no measurement series provided' in block['detail']
 
 
 class TestKbSearchTool:

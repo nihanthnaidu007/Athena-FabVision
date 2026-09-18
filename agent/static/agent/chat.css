@@ -417,6 +417,51 @@ body {
 
 .wafer-issues { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
 
+/* spc_chart control-chart card */
+
+.spc-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 6px 0 8px;
+}
+
+@media (max-width: 640px) { .spc-grid { grid-template-columns: repeat(3, 1fr); } }
+
+.spc-stat {
+    background: #f2f5f8;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    padding: 7px 10px;
+    text-align: center;
+}
+
+.spc-stat-value { font-size: 16px; font-weight: 700; color: var(--ink); }
+.spc-stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
+.spc-chart { width: 100%; height: auto; display: block; margin: 4px 0 8px; }
+
+.spc-chart-line { stroke: var(--accent); stroke-width: 1.6; }
+
+.spc-chart-point { fill: var(--accent); }
+.spc-chart-point.flagged { fill: var(--danger); stroke: #ffffff; stroke-width: 1.4; }
+
+.spc-chart-limit { stroke: var(--danger); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.spc-chart-center { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }
+
+.spc-chart-guide-label { font-size: 11px; fill: var(--muted); }
+.spc-chart-axis-label { font-size: 11px; fill: var(--muted); }
+
+.spc-violations { margin: 6px 0; padding-left: 18px; }
+.spc-violations li { margin-bottom: 6px; }
+.spc-violation-label { font-size: 13px; font-weight: 600; color: #922f2b; }
+.spc-violation-detail { font-size: 12.5px; color: var(--muted); }
+
+.spc-issues { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+
+.spc-references { margin-top: 8px; border-top: 1px solid var(--edge); padding-top: 6px; }
+.spc-reference { font-size: 11.5px; color: var(--muted); }
+
 /* ----- turn footers and alerts ----- */
 
 .turn-footer { margin-top: 6px; }

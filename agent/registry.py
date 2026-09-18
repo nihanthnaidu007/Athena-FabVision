@@ -1,7 +1,7 @@
 """Availability-aware tool registry and integration-contract loader.
 
 A tool is an async callable ``(user, **kwargs) -> dict`` whose result is
-a UI block ``{"type": "table" | "text" | "wafer_map" | "error", ...}``.
+a UI block ``{"type": "table" | "text" | "wafer_map" | "spc_chart" | "error", ...}``.
 Every registration carries an optional availability callable; only
 tools whose availability is satisfied are exposed to the model, so a
 missing integration key disables a feature instead of failing a turn.
@@ -30,7 +30,7 @@ ToolFn = Callable[..., Awaitable[dict[str, Any]] | dict[str, Any]]
 AvailabilityFn = Callable[[], bool]
 RetrieveFn = Callable[..., Any]
 
-BLOCK_TYPES = ('table', 'text', 'wafer_map', 'error')
+BLOCK_TYPES = ('table', 'text', 'wafer_map', 'spc_chart', 'error')
 
 
 async def maybe_await(value: Any) -> Any:
