@@ -55,8 +55,8 @@ The stream emits `event:` / `data:` frames. Event types and payloads:
 | `delta` | `{"text": "Edge-ring loss usually..."}` | One chunk of the answer (render incrementally) |
 | `tool_call` | `{"name": "wafer_map_analyze", "arguments": "{...}", "call_id": "..."}` | Model invoked a fab tool |
 | `tool_result` | `{"name": "wafer_map_analyze", "block": {"type": "wafer_map", ...}}` | Structured tool result block |
-| `sources` | `{"sources": [{"kind": "doc", "title": "...", "chunk_index": 3, "score": 0.82}, {"kind": "tool", "tool": "wafer_map_analyze", "summary": "..."}]}` | Citations for this turn |
-| `done` | `{"latency_ms": 1240, "message_id": 346}` | Turn complete and persisted |
+| `sources` | `{"sources": [{"kind": "doc", "document_id": 4, "chunk_id": 23, "title": "...", "snippet": "...", "score": 0.82}, {"kind": "tool", "tool": "wafer_map_analyze", "summary": "..."}]}` | Citations for this turn |
+| `done` | `{"latency_ms": 1240, "conversation_id": 12, "tokens_in": 189, "tokens_out": 41}` | Turn complete and persisted |
 | `error` | `{"code": "llm_unavailable", "error": "The model is not configured on this deployment."}` | Turn failed honestly (e.g. no `OPENAI_API_KEY`) |
 | `error` | `{"code": "agent_error", "error": "The assistant turn failed: ..."}` | Turn failed mid-flight |
 
@@ -81,15 +81,15 @@ event: delta
 data: {"text": "a process step problem at the wafer perimeter.", "request_id": "..."}
 
 event: sources
-data: {"sources": [{"kind": "doc", "title": "process_notes.md", "chunk_index": 3, "score": 0.82}], "request_id": "..."}
+data: {"sources": [{"kind": "doc", "document_id": 4, "chunk_id": 23, "title": "process_notes.md", "snippet": "Edge-ring yield loss usually ...", "score": 0.82}], "request_id": "..."}
 
 event: done
-data: {"latency_ms": 1240, "message_id": 346, "request_id": "..."}
+data: {"latency_ms": 1240, "conversation_id": 12, "tokens_in": 189, "tokens_out": 41, "request_id": "..."}
 ```
 
 ## Document upload — `POST /kb/documents/`
 
-Multipart form, `file` field. Accepted: `.txt`, `.md`, `.csv`, `.pdf` (≤10 MiB
+Multipart form, `file` field. Accepted: `.txt`, `.md`, `.pdf` (≤10 MiB
 by default). Ingestion is synchronous; the response reports the honest
 resulting state.
 
@@ -97,14 +97,14 @@ resulting state.
 curl -s -b cookies.txt -H "X-CSRFToken: $CSRF" -H "Referer: $BASE/" \
   -F "file=@process_notes.md" \
   $BASE/kb/documents/
-# {"id": 7, "status": "ready", "chunks": 12}        (with OPENAI_API_KEY)
-# {"id": 7, "status": "pending", ...}               (degraded: no embeddings key)
+# 201 {"document_id": 7, "status": "ready", "chunks": 12, "detail": "..."}   (with OPENAI_API_KEY)
+# 202 {"document_id": 7, "status": "pending", "chunks": 0, "detail": "..."}   (degraded: no embeddings key)
 ```
 
 Errors follow the JSON error contract:
 
 ```json
-{"error": "Unsupported file type \".docx\"; accepted: .txt, .md, .csv, .pdf.",
+{"error": "Unsupported file type \".docx\"; accepted: .txt, .md, .pdf.",
  "code": "validation_error", "request_id": "..."}
 ```
 
