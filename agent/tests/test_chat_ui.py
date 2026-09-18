@@ -19,7 +19,7 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from assistant.models import Conversation, Message
+from assistant.models import Conversation, Message, MessageFeedback
 
 pytestmark = pytest.mark.django_db
 
@@ -452,3 +452,50 @@ def test_set_mode_requires_post(client, user):
     get_response = client.get(reverse("chat-mode"))
 
     assert get_response.status_code == 405  # require_POST
+
+
+def test_chat_page_exposes_feedback_url_and_saved_verdict(client, user):
+    """The page wires the feedback endpoint and marks the assistant message
+    with the user's saved verdict for the client to hydrate."""
+    conversation = make_conversation(user, title="feedback thread")
+    assistant = add_message(
+        conversation, role=Message.Role.ASSISTANT, content="A ring of failing dies."
+    )
+    MessageFeedback.objects.create(message=assistant, user=user, value="up")
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert response.status_code == 200
+    assert 'data-feedback-url="/agent/feedback/"' in html
+    assert 'data-feedback="up"' in html
+
+
+def test_chat_page_renders_an_empty_verdict_without_feedback(client, user):
+    conversation = make_conversation(user, title="no verdict yet")
+    add_message(conversation, role=Message.Role.ASSISTANT, content="Answer.")
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert response.status_code == 200
+    assert 'data-feedback=""' in html
+    assert 'data-feedback="up"' not in html
+
+
+def test_chat_page_shows_only_the_viewing_user_s_verdict(client, user, other_user):
+    """Feedback is per user: someone else's verdict on the same message
+    never surfaces as mine."""
+    conversation = make_conversation(user, title="shared message, private verdict")
+    assistant = add_message(conversation, role=Message.Role.ASSISTANT, content="Answer.")
+    MessageFeedback.objects.create(message=assistant, user=other_user, value="down")
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert response.status_code == 200
+    assert 'data-feedback=""' in html
+    assert 'data-feedback="down"' not in html

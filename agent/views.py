@@ -89,8 +89,9 @@ class AgentStreamView(APIView):
     is honored only at creation -- an existing conversation's persisted
     mode always rules; the chat-mode endpoint changes it. The response
     streams ``event: <type>`` / ``data: <json>`` frames for status, delta,
-    tool_call, tool_result, sources, done, and error events; failures
-    inside the turn are error events, never a broken stream.
+    tool_call, tool_result, sources, turn_saved (the persisted assistant
+    message's pk, the per-message feedback hook), done, and error events;
+    failures inside the turn are error events, never a broken stream.
     """
 
     renderer_classes = [JSONRenderer]
@@ -144,13 +145,23 @@ class AgentStreamView(APIView):
 SIDEBAR_CONVERSATION_LIMIT = 50
 
 
-def _message_items(messages: list[Message]) -> list[dict[str, Any]]:
+def _message_items(messages: list[Message], user: Any) -> list[dict[str, Any]]:
     """View-model rows for the thread template.
 
     Each row carries deterministic ``json_script`` element ids so
     ``chat.js`` can hydrate markdown, citation chips, and tool blocks
-    from the persisted JSON fields.
+    from the persisted JSON fields. Assistant rows also carry the
+    user's saved feedback verdict (``''`` when none), which the client
+    renders as the active thumb -- one extra query for the whole page.
     """
+    feedback_by_message: dict[int, str] = {}
+    assistant_pks = [message.pk for message in messages if message.role == Message.Role.ASSISTANT]
+    if user is not None and assistant_pks:
+        feedback_by_message = dict(
+            MessageFeedback.objects.for_user(user)
+            .filter(message_id__in=assistant_pks)
+            .values_list('message_id', 'value')
+        )
     items: list[dict[str, Any]] = []
     for message in messages:
         pk = str(message.pk)
@@ -160,6 +171,7 @@ def _message_items(messages: list[Message]) -> list[dict[str, Any]]:
                 'content_id': f'msg-{pk}-content',
                 'sources_id': f'msg-{pk}-sources',
                 'blocks_id': f'msg-{pk}-blocks',
+                'feedback_value': feedback_by_message.get(message.pk, ''),
             }
         )
     return items
@@ -200,7 +212,7 @@ def chat_home(request: HttpRequest) -> HttpResponse:
         {
             'conversation_items': _conversation_items(request.user, active_pk),
             'active_conversation': active_conversation,
-            'message_items': _message_items(messages),
+            'message_items': _message_items(messages, request.user),
             'llm_configured': default_client() is not None,
         },
     )

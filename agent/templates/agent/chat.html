@@ -19,6 +19,7 @@
      data-new-chat-url="{% url 'chat-new' %}"
      data-chat-home-url="{% url 'chat-home' %}"
      data-mode-url="{% url 'chat-mode' %}"
+     data-feedback-url="{% url 'message-feedback' %}"
      data-llm-configured="{% if llm_configured %}true{% else %}false{% endif %}">
     <aside class="sidebar">
         <div class="brand">
@@ -70,7 +71,8 @@
         <div class="thread" id="thread" aria-live="polite">
             {% for item in message_items %}
             <article class="message msg-{{ item.message.role }}"
-                     data-message-id="{{ item.message.pk }}" data-role="{{ item.message.role }}">
+                     data-message-id="{{ item.message.pk }}" data-role="{{ item.message.role }}"
+                     data-feedback="{{ item.feedback_value }}">
                 <div class="msg-bubble">
                     <div class="msg-content" data-content-for="{{ item.content_id }}"></div>
                     {{ item.message.content|json_script:item.content_id }}

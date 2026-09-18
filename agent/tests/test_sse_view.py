@@ -155,7 +155,7 @@ def test_full_turn_over_sse_records_usage_and_persists(transactional_db, user, m
 
     types = [event_type for event_type, _ in frames]
     assert types[0] == "status"
-    assert types[-4:] == ["delta", "delta", "sources", "done"]
+    assert types[-5:] == ["delta", "delta", "sources", "turn_saved", "done"]
     done_data = frames[-1][1]
     assert done_data["tokens_in"] == 4
     assert done_data["tokens_out"] == 2
