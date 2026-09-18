@@ -415,6 +415,49 @@ body {
 
 .bin-table { max-width: 320px; }
 
+/* die-grid heat map (wafer_map blocks that carry the dies payload) */
+
+.wafer-body {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 14px;
+}
+
+.wafer-body .wafer-grid { flex: 1 1 220px; margin: 0; }
+
+.wafer-map-figure { margin: 0; flex: 0 0 auto; }
+
+.wafer-map-svg {
+    display: block;
+    width: 100%;
+    max-width: 240px;
+    height: auto;
+    background: #fbfcfe;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+}
+
+.wafer-legend {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 5px;
+    font-size: 11.5px;
+    color: var(--muted);
+}
+
+.wafer-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: -1px;
+}
+
+.wafer-map-note { margin-top: 4px; font-size: 11.5px; color: #7a5c00; }
+
 .wafer-issues { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
 
 /* spc_chart control-chart card */
