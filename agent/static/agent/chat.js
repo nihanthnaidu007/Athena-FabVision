@@ -113,6 +113,148 @@
         return card;
     }
 
+    // ---------- wafer die-grid SVG (spec v1.1 feature 1) ----------
+
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+    // Mirrors fabtools.wafer_map.PASS_BIN: bin 1 passes, every other valid
+    // bin is a fail. Fail fills shade by bin code (0 = untested gray).
+    var PASS_BIN = 1;
+    var PASS_FILL = '#2f9e44';
+    var FAIL_FILLS = { 0: '#9aa5b1', 2: '#d9480f', 3: '#e8590c', 4: '#f76707', 5: '#e03131' };
+    var FAIL_FILL_DEFAULT = '#c92a2a';
+
+    function svgEl(tag, attrs) {
+        var node = document.createElementNS(SVG_NS, tag);
+        if (attrs) {
+            Object.keys(attrs).forEach(function (key) {
+                node.setAttribute(key, attrs[key]);
+            });
+        }
+        return node;
+    }
+
+    function dieFill(bin) {
+        var code = Number(bin);
+        if (code === PASS_BIN) return PASS_FILL;
+        return FAIL_FILLS[code] || FAIL_FILL_DEFAULT;
+    }
+
+    function renderWaferDieMap(block) {
+        // Returns the figure element, or null when the block predates the
+        // die payload (old blocks keep rendering stats-only, unchanged).
+        var dies = Array.isArray(block.dies) ? block.dies : [];
+        if (!dies.length) return null;
+
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        dies.forEach(function (die) {
+            if (die.x < minX) minX = die.x;
+            if (die.x > maxX) maxX = die.x;
+            if (die.y < minY) minY = die.y;
+            if (die.y > maxY) maxY = die.y;
+        });
+        var cols = maxX - minX + 1;
+        var rows = maxY - minY + 1;
+        var CELL = 12;
+        var width = cols * CELL;
+        var height = rows * CELL;
+        // Wafer orientation: +y is up, so svg rows flip.
+        var cellX = function (x) { return (x - minX) * CELL; };
+        var cellY = function (y) { return (maxY - y) * CELL; };
+
+        var passCount = dies.filter(function (die) {
+            return Number(die.bin) === PASS_BIN;
+        }).length;
+        var svg = svgEl('svg', {
+            viewBox: '0 0 ' + width + ' ' + height,
+            width: width,
+            height: height,
+            role: 'img',
+            'aria-label': 'Wafer die grid: ' + dies.length + ' dies, ' +
+                passCount + ' pass, ' + (dies.length - passCount) + ' fail',
+            class: 'wafer-map-svg'
+        });
+
+        dies.forEach(function (die) {
+            var rect = svgEl('rect', {
+                x: cellX(die.x),
+                y: cellY(die.y),
+                width: CELL - 1,
+                height: CELL - 1,
+                fill: dieFill(die.bin),
+                'shape-rendering': 'crispEdges',
+                'data-die-cell': '1',
+                'data-die-bin': die.bin
+            });
+            // Native tooltip: bin and coordinates of the hovered die.
+            var tip = svgEl('title');
+            tip.textContent = 'bin ' + die.bin + ' @ (' + die.x + ', ' + die.y + ')';
+            rect.appendChild(tip);
+            svg.appendChild(rect);
+        });
+
+        // Pattern overlays follow the backend's thresholded patterns list --
+        // the JS never re-derives thresholds (single source of truth).
+        // Radii come from the analyzer's own geometry: rMax is the largest
+        // die distance from the lattice center, the edge band starts at 90%
+        // of it, the hotspot region ends at 25% (fabtools.wafer_map).
+        var patterns = Array.isArray(block.patterns) ? block.patterns : [];
+        if (patterns.length) {
+            var centerX = (minX + maxX) / 2;
+            var centerY = (minY + maxY) / 2;
+            var rMaxUnits = 0;
+            dies.forEach(function (die) {
+                var d = Math.hypot(die.x - centerX, die.y - centerY);
+                if (d > rMaxUnits) rMaxUnits = d;
+            });
+            var overlayCircle = function (radiusUnits, pattern) {
+                return svgEl('circle', {
+                    cx: (centerX - minX) * CELL + CELL / 2,
+                    cy: (maxY - centerY) * CELL + CELL / 2,
+                    r: radiusUnits * CELL,
+                    fill: 'none',
+                    stroke: '#e03131',
+                    'stroke-dasharray': '4 3',
+                    'stroke-width': 1.5,
+                    'data-pattern-overlay': pattern
+                });
+            };
+            if (patterns.indexOf('edge_ring') !== -1) {
+                svg.appendChild(overlayCircle(rMaxUnits, 'edge_ring_outer'));
+                svg.appendChild(overlayCircle(rMaxUnits * 0.9, 'edge_ring_inner'));
+            }
+            if (patterns.indexOf('center_hotspot') !== -1) {
+                svg.appendChild(overlayCircle(rMaxUnits * 0.25, 'center_hotspot'));
+            }
+        }
+
+        var figure = el('figure', 'wafer-map-figure');
+        figure.appendChild(svg);
+        var legend = el('div', 'wafer-legend');
+        function legendItem(color, label) {
+            var item = el('span', 'wafer-legend-item');
+            var swatch = el('span', 'wafer-swatch');
+            swatch.style.background = color;
+            item.appendChild(swatch);
+            item.appendChild(el('span', null, label));
+            return item;
+        }
+        legend.appendChild(legendItem(PASS_FILL, 'pass (bin 1)'));
+        legend.appendChild(legendItem(FAIL_FILL_DEFAULT, 'fail (shaded by bin)'));
+        figure.appendChild(legend);
+        var omitted = Number(block.dies_omitted) || 0;
+        if (omitted > 0) {
+            figure.appendChild(el('div', 'wafer-map-note',
+                'Showing ' + dies.length + ' of ' + (dies.length + omitted) +
+                ' dies — ' + omitted + ' omitted by downsampling.'
+            ));
+        } else {
+            figure.appendChild(el('div', 'wafer-map-caption muted small',
+                dies.length + ' dies — hover for bin and coordinates.'
+            ));
+        }
+        return figure;
+    }
+
     function renderWaferBlock(block) {
         var card = el('div', 'tool-card wafer-card');
         card.appendChild(el('div', 'tool-card-title', block.title || 'Wafer map analysis'));
@@ -131,7 +273,16 @@
         grid.appendChild(stat('Yield', formatScore(block.yield_pct, '%')));
         grid.appendChild(stat('Edge-ring score', formatScore(block.edge_ring_score)));
         grid.appendChild(stat('Center hotspot', formatScore(block.center_hotspot_score)));
-        card.appendChild(grid);
+        var dieMap = renderWaferDieMap(block);
+        if (dieMap) {
+            // Die grid beside the stats; flex-wraps to stacked on narrow screens.
+            var body = el('div', 'wafer-body');
+            body.appendChild(dieMap);
+            body.appendChild(grid);
+            card.appendChild(body);
+        } else {
+            card.appendChild(grid);
+        }
 
         var patterns = block.patterns || [];
         if (patterns.length) {

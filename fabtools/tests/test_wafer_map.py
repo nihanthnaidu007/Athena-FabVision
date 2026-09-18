@@ -14,6 +14,7 @@ Numbers are asserted exactly (or to tight float tolerance) — spec criterion
 5 demands exact yield/bin/edge-ring numbers, not vibes.
 """
 
+import math
 from pathlib import Path
 
 import pytest
@@ -190,3 +191,91 @@ class TestBinEdgeCases:
     def test_deterministic_across_calls(self):
         content = load_fixture('edge_ring.csv')
         assert wafer_map.analyze_wafer_csv(content) == wafer_map.analyze_wafer_csv(content)
+
+
+class TestDieGridPayload:
+    """The block embeds the per-die lattice (x, y, bin) the analyzer computes.
+
+    Additive contract: aggregates keep their exact golden numbers; ``dies``
+    and ``dies_omitted`` ride alongside them (spec v1.1 feature 1).
+    """
+
+    def test_dies_embedded_for_golden_fixture(self):
+        block = wafer_map.analyze_wafer_csv(load_fixture('edge_ring.csv'))
+        assert len(block['dies']) == 81
+        assert block['dies_omitted'] == 0
+        passing = sum(1 for die in block['dies'] if die['bin'] == 1)
+        failing = sum(1 for die in block['dies'] if die['bin'] != 1)
+        assert (passing, failing) == (69, 12)
+
+    def test_die_entries_carry_only_coordinates_and_bin(self):
+        block = wafer_map.analyze_wafer_csv(load_fixture('edge_ring.csv'))
+        assert all(set(die) == {'x', 'y', 'bin'} for die in block['dies'])
+
+    def test_die_order_is_canonical_by_y_then_x(self):
+        # CSV order is scrambled; the payload is sorted (y, x) regardless.
+        csv = 'wafer_id,x,y,bin\nW1,1,1,2\nW1,-5,-5,1\nW1,0,0,1\n'
+        block = wafer_map.analyze_wafer_csv(csv)
+        assert block['dies'] == [
+            {'x': -5, 'y': -5, 'bin': 1},
+            {'x': 0, 'y': 0, 'bin': 1},
+            {'x': 1, 'y': 1, 'bin': 2},
+        ]
+
+    def test_small_grids_pass_through_untouched(self):
+        block = wafer_map.analyze_wafer_csv(load_fixture('clean_wafer.csv'))
+        assert block['dies_omitted'] == 0
+        assert len(block['dies']) == block['total_dies'] == 81
+
+    def test_cap_boundary_grid_passes_through(self):
+        # Exactly MAX_DIE_POINTS dies: no stride, nothing omitted.
+        side = int(math.isqrt(wafer_map.MAX_DIE_POINTS))
+        count = side * side
+        csv = 'wafer_id,x,y,bin\n' + ''.join(
+            f'W1,{x},{y},1\n' for y in range(side) for x in range(side)
+        )
+        assert count == wafer_map.MAX_DIE_POINTS
+        block = wafer_map.analyze_wafer_csv(csv)
+        assert block['dies_omitted'] == 0
+        assert len(block['dies']) == count
+
+    def test_large_grid_downsamples_by_integer_stride(self):
+        # 60x60 = 3600 dies > the 2500-point cap: stride 2 anchored at the
+        # lattice minimum keeps every second row and column -> 900 points.
+        csv = 'wafer_id,x,y,bin\n' + ''.join(
+            f'W1,{x},{y},1\n' for y in range(60) for x in range(60)
+        )
+        block = wafer_map.analyze_wafer_csv(csv)
+        assert block['total_dies'] == 3600
+        assert len(block['dies']) == 900
+        assert block['dies_omitted'] == 2700
+        assert all(
+            die['x'] % 2 == 0 and die['y'] % 2 == 0 for die in block['dies']
+        )
+
+    def test_downsampled_aggregates_stay_exact(self):
+        # Downsampling shapes the visual payload only; totals never change.
+        csv = 'wafer_id,x,y,bin\n' + ''.join(
+            f'W1,{x},{y},1\n' for y in range(60) for x in range(60)
+        )
+        block = wafer_map.analyze_wafer_csv(csv)
+        assert block['pass_count'] == 3600
+        assert block['yield_pct'] == pytest.approx(1.0, abs=1e-9)
+
+    def test_negative_coordinates_downsample_with_positive_anchor(self):
+        # A +/-40 lattice with a failed corner: stride 2 keeps dies at even
+        # offsets from the lattice minimum (-40, -40). Python's % on the
+        # anchored offsets keeps this well-defined for negative coordinates.
+        csv = 'wafer_id,x,y,bin\n' + ''.join(
+            f'W1,{x},{y},1\n' for y in range(-40, 41) for x in range(-40, 41)
+        )
+        csv = csv.replace('W1,40,40,1', 'W1,40,40,3')
+        block = wafer_map.analyze_wafer_csv(csv)
+        assert block['total_dies'] == 81 * 81
+        kept = {(die['x'], die['y']) for die in block['dies']}
+        assert (-40, -40) in kept       # anchor survives
+        assert (40, 40) in kept         # even offset (80, 80)
+        assert (39, 39) not in kept     # odd offset (79, 79)
+        failed = [die for die in block['dies'] if die['bin'] != 1]
+        assert failed == [{'x': 40, 'y': 40, 'bin': 3}]
+        assert block['dies_omitted'] == 81 * 81 - len(kept)
