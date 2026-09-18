@@ -28,6 +28,37 @@
         return node;
     }
 
+    // ---------- clipboard (copy answer) ----------
+
+    function fallbackCopy(text) {
+        // execCommand is deprecated but is the only in-page path when
+        // navigator.clipboard is unavailable (insecure context).
+        try {
+            var area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            var ok = document.execCommand('copy');
+            document.body.removeChild(area);
+            return ok;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(
+                function () { return true; },
+                function () { return fallbackCopy(text); }
+            );
+        }
+        return Promise.resolve(fallbackCopy(text));
+    }
+
     // ---------- markdown (marked) + sanitization (DOMPurify) ----------
 
     function renderMarkdown(text, target) {
@@ -559,12 +590,12 @@
 
     // ---------- per-message feedback (the trust loop's write path) ----------
 
-    function renderFeedbackControls(article, messageId, savedValue, feedbackUrl, csrfToken) {
-        // Thumbs on assistant messages. History passes the persisted
-        // verdict (data-feedback); a fresh turn calls this once its
-        // turn_saved event has delivered the message id. Clicking the
-        // active thumb clears the verdict; failures revert the toggle
-        // and say so -- never silent.
+    function renderFeedbackControls(article, messageId, savedValue, feedbackUrl, csrfToken, getText) {
+        // Thumbs (and the copy button) on assistant messages. History
+        // passes the persisted verdict (data-feedback); a fresh turn
+        // calls this once its turn_saved event has delivered the
+        // message id. Clicking the active thumb clears the verdict;
+        // failures revert the toggle and say so -- never silent.
         if (!feedbackUrl || !messageId || article.querySelector('.feedback')) return;
         var row = el('div', 'feedback');
         row.setAttribute('data-feedback-for', messageId);
@@ -623,9 +654,30 @@
             send(value() === 'down' ? 'none' : 'down');
         });
 
+        var copyButton = el('button', 'feedback-btn feedback-copy', '\ud83d\udccb');
+        copyButton.type = 'button';
+        copyButton.title = 'Copy answer';
+        copyButton.setAttribute('aria-label', 'Copy this answer to the clipboard');
+        copyButton.addEventListener('click', function () {
+            var text = getText ? String(getText() || '') : '';
+            if (!text) {
+                setStatus('Nothing to copy yet.');
+                return;
+            }
+            copyToClipboard(text).then(function (ok) {
+                if (ok) {
+                    setStatus('Copied.');
+                    window.setTimeout(function () { setStatus(''); }, 2000);
+                } else {
+                    setStatus('Could not copy — select the text instead.');
+                }
+            });
+        });
+
         row.appendChild(statusText);
         row.appendChild(upButton);
         row.appendChild(downButton);
+        row.appendChild(copyButton);
         setActive(savedValue || '');
         article.appendChild(row);
     }
@@ -640,6 +692,19 @@
         } catch (err) {
             return null;
         }
+    }
+
+    function rawAnswerText(article) {
+        // The answer's original markdown: the json_script payload for
+        // hydrated history; the rendered text is the honest fallback
+        // when a fresh turn never got a payload node.
+        var contentFor = article.querySelector('[data-content-for]');
+        if (contentFor) {
+            var stored = jsonFromScript(contentFor.getAttribute('data-content-for'));
+            if (typeof stored === 'string') return stored;
+        }
+        var contentEl = article.querySelector('.msg-content');
+        return contentEl ? contentEl.textContent : '';
     }
 
     function hydrateHistory(thread, feedbackUrl, csrfToken) {
@@ -672,7 +737,8 @@
                     article.getAttribute('data-message-id'),
                     article.getAttribute('data-feedback') || '',
                     feedbackUrl,
-                    csrfToken
+                    csrfToken,
+                    function () { return rawAnswerText(article); }
                 );
             }
         });
@@ -700,6 +766,11 @@
         var tutorToggle = $('#tutor-toggle');
         var modeStatus = $('#mode-status');
         var notebookSelect = $('#notebook-select');
+        var regenerateButton = $('#regenerate-button');
+
+        // Raw answer text per rendered assistant article, for the copy
+        // button (fresh turns have no json_script payload to read).
+        var rawAnswers = new WeakMap();
 
         var state = {
             conversationId: root.getAttribute('data-conversation-id') || '',
@@ -709,6 +780,9 @@
             chatHomeUrl: root.getAttribute('data-chat-home-url'),
             modeUrl: root.getAttribute('data-mode-url') || '',
             feedbackUrl: root.getAttribute('data-feedback-url') || '',
+            renameUrl: root.getAttribute('data-rename-url') || '',
+            deleteUrlTemplate: root.getAttribute('data-delete-url-template') || '',
+            regenerateUrlTemplate: root.getAttribute('data-regenerate-url-template') || '',
             // The server renders the active conversation's mode; a fresh
             // page starts in assistant mode until the student toggles.
             mode: tutorToggle && tutorToggle.getAttribute('aria-pressed') === 'true'
@@ -737,6 +811,7 @@
             if (notebookSelect) {
                 notebookSelect.disabled = streaming || Boolean(state.conversationId);
             }
+            if (regenerateButton) regenerateButton.disabled = streaming;
             stopButton.hidden = !streaming;
         }
 
@@ -822,14 +897,26 @@
             return card;
         }
 
-        function replaceToolCard(turn, name, block) {
+        function replaceToolCard(turn, name, block, callId) {
             var rendered = renderToolBlock(block);
             var running = turn.blocks.querySelectorAll('.tool-running');
-            for (var i = 0; i < running.length; i++) {
-                // tool_result carries no call id; calls run in order, so the
-                // first still-running card matching the tool name is ours.
-                if (!name || running[i].textContent.indexOf(name) !== -1) {
-                    turn.blocks.replaceChild(rendered, running[i]);
+            if (callId) {
+                // The tool_call card carries the call id; the result event
+                // now carries it too, so same-name calls each replace their
+                // own card. Attribute read, not a selector -- call ids are
+                // model-generated and never query-interpolated.
+                for (var i = 0; i < running.length; i++) {
+                    if (running[i].getAttribute('data-call-id') === callId) {
+                        turn.blocks.replaceChild(rendered, running[i]);
+                        return;
+                    }
+                }
+            }
+            for (var j = 0; j < running.length; j++) {
+                // Fallback: results without a call id (older streams) match
+                // the first still-running card of the same tool, in order.
+                if (!name || running[j].textContent.indexOf(name) !== -1) {
+                    turn.blocks.replaceChild(rendered, running[j]);
                     return;
                 }
             }
@@ -873,16 +960,57 @@
             return badge;
         }
 
+        function deleteFormFor(id) {
+            // Fresh rows get the same working delete control the server
+            // renders: a POST form with its CSRF token and the confirm
+            // guard (the document-level submit listener honors it).
+            var form = el('form', 'inline');
+            form.method = 'post';
+            form.action = state.deleteUrlTemplate.replace('/0/', '/' + id + '/');
+            form.setAttribute('data-confirm', 'Delete this conversation and its messages?');
+            var token = el('input');
+            token.type = 'hidden';
+            token.name = 'csrfmiddlewaretoken';
+            token.value = csrf;
+            form.appendChild(token);
+            var button = el('button', 'icon-btn delete-btn', '\u00d7');
+            button.type = 'submit';
+            button.setAttribute('aria-label', 'Delete conversation');
+            button.setAttribute('title', 'Delete conversation');
+            form.appendChild(button);
+            return form;
+        }
+
+        function bumpSidebarCap() {
+            // The indicator counts conversations; a new row makes it one more.
+            var cap = conversationList.querySelector('[data-sidebar-cap]');
+            if (!cap) return;
+            var limit = cap.getAttribute('data-sidebar-limit') || '50';
+            var total = Number(cap.getAttribute('data-sidebar-total')) + 1;
+            cap.setAttribute('data-sidebar-total', String(total));
+            cap.textContent = 'Showing the ' + limit + ' most recent of ' + total +
+                ' conversations — older ones are hidden.';
+        }
+
         function addSidebarConversation(id, title, mode, notebookName) {
             if (sidebarConversationExists(id)) return;
             var item = el('div', 'conversation-item');
             item.setAttribute('data-conversation-item', id);
             var link = el('a', 'conversation-link', title || 'New conversation');
             link.href = state.chatHomeUrl + '?c=' + id;
+            link.title = title || 'New conversation';
             item.appendChild(link);
             if (mode === 'tutor') item.appendChild(modeBadge());
             if (notebookName) item.appendChild(notebookBadge(notebookName));
+            var renameButton = el('button', 'icon-btn rename-btn', '\u270e');
+            renameButton.type = 'button';
+            renameButton.setAttribute('data-rename-btn', '');
+            renameButton.setAttribute('aria-label', 'Rename conversation');
+            renameButton.setAttribute('title', 'Rename conversation');
+            item.appendChild(renameButton);
+            item.appendChild(deleteFormFor(id));
             conversationList.prepend(item);
+            bumpSidebarCap();
         }
 
         function updateSidebarBadge(id, mode) {
@@ -890,8 +1018,10 @@
             if (!item) return;
             var existing = item.querySelector('[data-mode-badge]');
             if (mode === 'tutor' && !existing) {
-                var deleteForm = item.querySelector('form');
-                if (deleteForm) item.insertBefore(modeBadge(), deleteForm);
+                // Server row order: link, badge, rename, delete. The rename
+                // button is the badge's left neighbor on fresh rows.
+                var anchor = item.querySelector('[data-rename-btn]') || item.querySelector('form');
+                if (anchor) item.insertBefore(modeBadge(), anchor);
                 else item.appendChild(modeBadge());
             } else if (mode !== 'tutor' && existing) {
                 existing.remove();
@@ -935,7 +1065,7 @@
                     scrollBottom();
                     break;
                 case 'tool_result':
-                    replaceToolCard(turn, data.name, data.block);
+                    replaceToolCard(turn, data.name, data.block, data.call_id);
                     scrollBottom();
                     break;
                 case 'sources':
@@ -952,13 +1082,18 @@
                     turn.article.classList.remove('streaming');
                     hideIndicator(turn);
                     addTurnFooter(turn, data.latency_ms);
+                    rawAnswers.set(turn.article, turn.text);
                     if (turn.savedMessageId) {
                         renderFeedbackControls(
                             turn.article,
                             turn.savedMessageId,
                             '',
                             state.feedbackUrl,
-                            csrf
+                            csrf,
+                            function () {
+                                return rawAnswers.get(turn.article) ||
+                                    rawAnswerText(turn.article);
+                            }
                         );
                     }
                     break;
@@ -972,35 +1107,26 @@
             }
         }
 
-        function runTurn(text) {
-            var turn = createTurn();
-            turn.titleHint = text.length > 60 ? text.slice(0, 60) + '…' : text;
-            appendUserMessage(text);
+        function streamTurn(url, body, turn, hooks) {
+            // The one fetch/pump loop both sends and regenerations share.
+            // hooks.onStart fires once the stream is confirmed live;
+            // hooks.onFail fires on a failure that never reached the
+            // server (the caller can undo optimistic DOM changes).
             setStreaming(true);
             showIndicator(turn, 'Athena is thinking…');
 
             var controller = new AbortController();
             state.controller = controller;
+            var landed = false;
 
-            fetch(state.streamUrl, {
+            fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': csrf,
                     'Accept': 'text/event-stream'
                 },
-                body: JSON.stringify({
-                    message: text,
-                    conversation_id: state.conversationId ? Number(state.conversationId) : undefined,
-                    // Creation-time only: an existing conversation's persisted
-                    // mode rules, changed through the mode endpoint.
-                    mode: state.conversationId ? undefined : state.mode,
-                    // Creation-time only: an existing conversation keeps its
-                    // own notebook scope; empty means the whole KB.
-                    notebook_id: state.conversationId || !notebookSelect
-                        ? undefined
-                        : (notebookSelect.value || undefined)
-                }),
+                body: JSON.stringify(body),
                 signal: controller.signal
             }).then(function (response) {
                 if (!response.ok || !response.body) {
@@ -1012,6 +1138,8 @@
                             );
                         });
                 }
+                landed = true;
+                if (hooks && hooks.onStart) hooks.onStart();
                 var reader = response.body.getReader();
                 var decoder = new TextDecoder();
                 var parser = createSseParser(
@@ -1033,6 +1161,7 @@
                     var stopped = el('div', 'turn-footer muted small', 'Stopped — partial answer kept.');
                     turn.article.appendChild(stopped);
                 } else {
+                    if (hooks && hooks.onFail && !landed) hooks.onFail();
                     surfaceTurnError(turn, err && err.message ? err.message : String(err));
                 }
             }).finally(function () {
@@ -1042,6 +1171,55 @@
                 state.controller = null;
                 input.focus();
             });
+        }
+
+        function runTurn(text) {
+            var turn = createTurn();
+            turn.titleHint = text.length > 60 ? text.slice(0, 60) + '…' : text;
+            appendUserMessage(text);
+            streamTurn(state.streamUrl, {
+                message: text,
+                conversation_id: state.conversationId ? Number(state.conversationId) : undefined,
+                // Creation-time only: an existing conversation's persisted
+                // mode rules, changed through the mode endpoint.
+                mode: state.conversationId ? undefined : state.mode,
+                // Creation-time only: an existing conversation keeps its
+                // own notebook scope; empty means the whole KB.
+                notebook_id: state.conversationId || !notebookSelect
+                    ? undefined
+                    : (notebookSelect.value || undefined)
+            }, turn);
+        }
+
+        // ----- regenerate the last answer (spec #9) -----
+
+        function lastAssistantArticle() {
+            var articles = thread.querySelectorAll('.message[data-role="assistant"]');
+            return articles.length ? articles[articles.length - 1] : null;
+        }
+
+        function regenerateLastAnswer() {
+            if (state.streaming || !state.conversationId) return;
+            if (!state.regenerateUrlTemplate) return;
+            var previous = lastAssistantArticle();
+            if (!previous) return;
+            // Regenerating replaces the old answer (the server deletes
+            // its row); the confirm keeps an idle click from costing it.
+            if (!window.confirm('Replace the last answer with a fresh one?')) return;
+            var turn = createTurn();
+            previous.remove();
+            streamTurn(
+                state.regenerateUrlTemplate.replace('/0/', '/' + state.conversationId + '/'),
+                {},
+                turn,
+                {
+                    // The request never landed: put the old answer back
+                    // where it was instead of pretending it streamed.
+                    onFail: function () {
+                        thread.insertBefore(previous, turn.article);
+                    }
+                }
+            );
         }
 
         // ----- wafer CSV handoff (storage-only documents -> analyzer) -----
@@ -1219,6 +1397,72 @@
             // and is persisted when the conversation is created.
         }
 
+        // ----- inline rename (per-row pencil) -----
+
+        function startRename(item) {
+            if (!item || item.querySelector('.rename-input')) return;
+            var id = item.getAttribute('data-conversation-item');
+            var link = item.querySelector('.conversation-link');
+            if (!id || !link) return;
+            var current = link.textContent;
+            var input = el('input', 'rename-input');
+            input.type = 'text';
+            input.value = current;
+            input.maxLength = 200;
+            input.setAttribute('aria-label', 'Conversation title');
+            link.hidden = true;
+            item.insertBefore(input, link);
+            input.focus();
+            input.select();
+            var settled = false;
+            function finish() {
+                settled = true;
+                input.remove();
+                link.hidden = false;
+            }
+            function commit() {
+                var next = input.value.trim();
+                if (!next || next === current) {
+                    // A blank or unchanged title is a cancel, not a save.
+                    finish();
+                    return;
+                }
+                var body = new FormData();
+                body.append('conversation_id', id);
+                body.append('title', next);
+                fetch(state.renameUrl, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': csrf },
+                    body: body
+                }).then(function (response) {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.json();
+                }).then(function (payload) {
+                    link.textContent = payload.title;
+                    link.title = payload.title;
+                    finish();
+                }).catch(function () {
+                    // Honest failure: keep the editor open, mark it, and
+                    // say how to recover -- the old title stays put.
+                    input.classList.add('rename-error');
+                    input.title = 'Rename failed — press Enter to retry or Escape to cancel';
+                    input.focus();
+                });
+            }
+            input.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    commit();
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    finish();
+                }
+            });
+            input.addEventListener('blur', function () {
+                if (!settled) commit();
+            });
+        }
+
         // ----- wiring -----
 
         form.addEventListener('submit', function (event) {
@@ -1244,6 +1488,17 @@
 
         stopButton.addEventListener('click', function () {
             if (state.controller) state.controller.abort();
+        });
+
+        if (regenerateButton) {
+            regenerateButton.addEventListener('click', regenerateLastAnswer);
+        }
+
+        conversationList.addEventListener('click', function (event) {
+            var button = event.target.closest('[data-rename-btn]');
+            if (!button) return;
+            event.preventDefault();
+            startRename(button.closest('[data-conversation-item]'));
         });
 
         tutorToggle.addEventListener('click', function () {

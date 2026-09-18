@@ -188,6 +188,7 @@ async def run_agent(
     history_limit: int = HISTORY_MESSAGE_LIMIT,
     max_tool_rounds: int = TOOL_ROUNDS_LIMIT,
     notebook_id: int | None = None,
+    existing_user_message: Message | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Stream one agent turn as typed events; persist it and its usage.
 
@@ -198,6 +199,13 @@ async def run_agent(
     Errors never propagate: every failure inside the turn becomes an
     ``error`` event, and whatever assistant text was already produced is
     persisted so an aborted turn keeps its partial answer.
+
+    ``existing_user_message`` is the regenerate path (spec #9): the
+    caller already has the persisted user row for this turn, so it is
+    reused instead of duplicated and its content becomes the turn
+    input. The view deletes the stale answer before streaming; this
+    parameter is what keeps regenerating from ever adding a second
+    user message.
     """
     reg = registry if registry is not None else tool_registry.REGISTRY
     retrieve = retrieve if retrieve is not None else reg.retrieval
@@ -262,9 +270,13 @@ async def run_agent(
             getattr(user, 'pk', None),
             conversation.pk,
         )
-        user_message = await _create_message(
-            conversation, role=Message.Role.USER, content=user_input
-        )
+        if existing_user_message is not None:
+            # Regenerate: reuse the persisted user row and its content.
+            user_message = existing_user_message
+        else:
+            user_message = await _create_message(
+                conversation, role=Message.Role.USER, content=user_input
+            )
         yield AgentEvent(
             EVENT_STATUS,
             _rid({
@@ -343,7 +355,14 @@ async def run_agent(
                     request_id,
                     block.get('type'),
                 )
-                yield AgentEvent(EVENT_TOOL_RESULT, _rid({'name': call.name, 'block': block}))
+                # ``call_id`` pairs the result with its tool_call event so
+                # the client replaces the right card even when one turn
+                # calls the same tool twice. Additive: consumers that
+                # never read it keep matching by tool name.
+                yield AgentEvent(
+                    EVENT_TOOL_RESULT,
+                    _rid({'name': call.name, 'block': block, 'call_id': call.id}),
+                )
                 messages.append(
                     {
                         'role': 'tool',

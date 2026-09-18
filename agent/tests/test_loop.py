@@ -112,6 +112,9 @@ async def test_event_sequence_with_tool_round_trip(db, user, conversation):
     assert tool_result_event.data["name"] == "echo_tool"
     assert tool_result_event.data["block"]["type"] == "text"
     assert tool_result_event.data["block"]["summary"] == "echo:LOT-7"
+    # The result pairs with its call, so the client replaces the right
+    # card even when one turn calls the same tool twice.
+    assert tool_result_event.data["call_id"] == "call_9"
     sources_event = next(e for e in events if e.type == "sources")
     assert sources_event.data["sources"] == [
         {"kind": "tool", "tool": "echo_tool", "summary": "echo:LOT-7"},
@@ -646,3 +649,81 @@ def test_failed_turn_persists_partial_without_turn_saved(user, conversation):
 
     assert not [event for event in events if event.type == "turn_saved"]
     assert conversation.messages.get(role=Message.Role.ASSISTANT).content == "Partial answer "
+
+
+# --- Regenerate path (spec #9): reuse the persisted user row -------------
+
+
+def add_turn(conversation, user_text, assistant_text):
+    Message.objects.create(conversation=conversation, role=Message.Role.USER, content=user_text)
+    return Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content=assistant_text
+    )
+
+
+def test_regenerate_reuses_user_row_and_replaces_answer(transactional_db, user, conversation):
+    """Regenerating runs on the existing user message: no duplicate user
+    row, and the fresh answer is persisted after it. (The view deletes the
+    stale answer before the loop runs -- that is its contract, pinned in
+    test_sse_view.py.)"""
+    user_row = Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Why is yield low?"
+    )
+    fake = FakeLLM([[delta("Fresh answer."), usage()]])
+
+    async def _scenario():
+        return [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input=user_row.content,
+                llm=fake,
+                registry=make_registry(),
+                existing_user_message=user_row,
+            )
+        ]
+
+    events = asyncio.run(_scenario())
+
+    roles_and_contents = list(conversation.messages.values_list("role", "content"))
+    assert roles_and_contents == [("user", "Why is yield low?"), ("assistant", "Fresh answer.")]
+    # The status event still points at the reused user row.
+    started = next(event for event in events if event.type == "status")
+    assert started.data["message_id"] == user_row.pk
+    # And the model saw the reused user turn exactly once (appended after
+    # history by build_messages, not duplicated by a second persistence).
+    turn_messages = fake.calls[0]["messages"]
+    user_turns = [m for m in turn_messages if m["role"] == "user"]
+    assert user_turns == [{"role": "user", "content": "Why is yield low?"}]
+
+
+def test_regenerate_history_contains_prior_turns(transactional_db, user, conversation):
+    """The reused user row is excluded from history (build_messages appends
+    it explicitly), while earlier turns stay in context."""
+    add_turn(conversation, "First question?", "First answer.")
+    second_user = Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Second question?"
+    )
+    fake = FakeLLM([[delta("Regenerated second answer."), usage()]])
+
+    async def _scenario():
+        return [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input=second_user.content,
+                llm=fake,
+                registry=make_registry(),
+                existing_user_message=second_user,
+            )
+        ]
+
+    events = asyncio.run(_scenario())
+    assert event_types(events)[-1] == "done"
+
+    model_messages = fake.calls[0]["messages"]
+    texts = [m["content"] for m in model_messages if m["role"] in ("user", "assistant")]
+    # First turn is in context; the reused row is appended once, last.
+    assert texts == ["First question?", "First answer.", "Second question?"]

@@ -12,6 +12,7 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 from rest_framework import exceptions
 from rest_framework.negotiation import DefaultContentNegotiation
@@ -21,6 +22,7 @@ from rest_framework.views import APIView
 from assistant.models import ApiKey, Conversation, Message, MessageFeedback, Notebook
 from django_agent.logging_context import get_request_id
 
+from .export import conversation_to_markdown
 from .llm import default_client
 from .loop import run_agent
 
@@ -126,21 +128,68 @@ class AgentStreamView(APIView):
             )
 
         request_id = getattr(request, 'request_id', '')
-        response = StreamingHttpResponse(
-            agent_sse_stream(
-                user=request.user,
-                conversation=conversation,
-                user_input=user_input,
-                request_id=request_id,
-                api_key=request.auth if isinstance(request.auth, ApiKey) else None,
-                notebook_id=conversation.notebook_id,
-            ),
-            content_type='text/event-stream',
+        return _sse_response(
+            user=request.user,
+            conversation=conversation,
+            user_input=user_input,
+            request_id=request_id,
+            api_key=request.auth if isinstance(request.auth, ApiKey) else None,
+            notebook_id=conversation.notebook_id,
         )
-        response['Cache-Control'] = 'no-cache'
-        # Disable proxy buffering (nginx et al.) so deltas arrive live.
-        response['X-Accel-Buffering'] = 'no'
-        return response
+
+
+class AgentRegenerateView(APIView):
+    """POST /agent/chat/<pk>/regenerate/ -- a fresh answer for the last turn.
+
+    Same auth, throttling, and SSE contract as /agent/stream/. The
+    conversation's trailing assistant message is deleted (its feedback
+    rows cascade with it) and the turn is regenerated from the user row
+    that produced it: ``existing_user_message`` reuses that row, so
+    regenerating never duplicates the user message. A conversation whose
+    final row is not an answer (empty, or a turn that failed before
+    producing output) answers 400 -- there is nothing to regenerate.
+    """
+
+    renderer_classes = [JSONRenderer]
+    content_negotiation_class = EventStreamNegotiation
+
+    def post(self, request, pk):
+        conversation = get_object_or_404(Conversation.objects.for_user(request.user), pk=pk)
+        last_row = conversation.messages.order_by('-pk').first()
+        if last_row is None or last_row.role != Message.Role.ASSISTANT:
+            raise exceptions.ValidationError('Nothing to regenerate yet — send a message first.')
+        user_message = (
+            conversation.messages.filter(role=Message.Role.USER, pk__lt=last_row.pk)
+            .order_by('-pk')
+            .first()
+        )
+        if user_message is None:
+            # Unreachable through the product (a user row always precedes
+            # its answer), but an honest 400 beats a fabricated turn.
+            raise exceptions.ValidationError('The last answer has no user turn to regenerate.')
+        last_row.delete()
+        return _sse_response(
+            user=request.user,
+            conversation=conversation,
+            user_input=user_message.content,
+            request_id=getattr(request, 'request_id', ''),
+            api_key=request.auth if isinstance(request.auth, ApiKey) else None,
+            existing_user_message=user_message,
+            notebook_id=conversation.notebook_id,
+        )
+
+
+def _sse_response(**kwargs: Any) -> StreamingHttpResponse:
+    """Wrap ``run_agent``'s events in the SSE response both streaming
+    endpoints return (``/agent/stream/`` and ``.../regenerate/``)."""
+    response = StreamingHttpResponse(
+        agent_sse_stream(**kwargs),
+        content_type='text/event-stream',
+    )
+    response['Cache-Control'] = 'no-cache'
+    # Disable proxy buffering (nginx et al.) so deltas arrive live.
+    response['X-Accel-Buffering'] = 'no'
+    return response
 
 
 def _resolve_notebook(request) -> Notebook | None:
@@ -212,6 +261,16 @@ def _conversation_items(user: Any, active_pk: int | None) -> list[dict[str, Any]
     ]
 
 
+def _sidebar_hidden_count(user: Any) -> int:
+    """Conversations beyond the sidebar cap -- the indicator's count.
+
+    The list silently truncates at SIDEBAR_CONVERSATION_LIMIT rows; the
+    page says so instead of pretending the oldest chats vanished.
+    """
+    total = Conversation.objects.for_user(user).count()
+    return max(total - SIDEBAR_CONVERSATION_LIMIT, 0)
+
+
 def _safe_pk(raw_pk: str | None) -> int | None:
     """Parse a ``?c=`` conversation id; malformed values are "not found"."""
     if raw_pk is None or raw_pk == '':
@@ -237,6 +296,8 @@ def chat_home(request: HttpRequest) -> HttpResponse:
         'agent/chat.html',
         {
             'conversation_items': _conversation_items(request.user, active_pk),
+            'sidebar_hidden_count': _sidebar_hidden_count(request.user),
+            'sidebar_limit': SIDEBAR_CONVERSATION_LIMIT,
             'active_conversation': active_conversation,
             'message_items': _message_items(messages, request.user),
             'llm_configured': default_client() is not None,
@@ -275,6 +336,44 @@ def set_conversation_mode(request: HttpRequest) -> HttpResponse:
     conversation.mode = mode
     conversation.save(update_fields=['mode', 'updated_at'])
     return JsonResponse({'conversation_id': conversation.pk, 'mode': mode})
+
+
+@login_required
+@require_POST
+def rename_conversation(request: HttpRequest) -> HttpResponse:
+    """Rename one of the user's own conversations inline (spec #9).
+
+    Body: ``conversation_id`` plus ``title``; answers JSON with the
+    persisted title. Blank titles are rejected (a rename is a deliberate
+    edit, unlike creating, where a blank title defaults); foreign
+    conversations 404.
+    """
+    conversation = get_object_or_404(
+        Conversation.objects.for_user(request.user),
+        pk=_safe_pk(request.POST.get('conversation_id')),
+    )
+    title = str(request.POST.get('title') or '').strip()[:200]
+    if not title:
+        return HttpResponseBadRequest('A non-empty title is required.')
+    conversation.title = title
+    conversation.save(update_fields=['title', 'updated_at'])
+    return JsonResponse({'conversation_id': conversation.pk, 'title': conversation.title})
+
+
+@login_required
+def export_conversation(request: HttpRequest, pk: int) -> HttpResponse:
+    """Download one of the user's conversations as Markdown (spec #9).
+
+    The document is assembled by agent/export.py -- the same plumbing
+    the RCA report generator reuses -- and served as an attachment; a
+    GET is safe here because exporting changes nothing.
+    """
+    conversation = get_object_or_404(Conversation.objects.for_user(request.user), pk=pk)
+    markdown = conversation_to_markdown(conversation, list(conversation.messages.all()))
+    slug = slugify(conversation.title) or 'conversation'
+    response = HttpResponse(markdown, content_type='text/markdown; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{slug}-{conversation.pk}.md"'
+    return response
 
 
 @login_required
