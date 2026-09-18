@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_CHUNK_OVERLAP = 100
 SUPPORTED_EXTENSIONS = ('.txt', '.md', '.pdf')
+# Storage-only documents (wafer-bin CSVs) are stored verbatim for tools that
+# read files -- the wafer analyzer -- and are never chunked or embedded, so
+# retrieval cannot see them. Parsing stays entirely with the analyzer.
+STORAGE_ONLY_EXTENSIONS = ('.csv',)
+# Everything the upload endpoint admits: knowledge-base text plus storage-only.
+ACCEPTED_EXTENSIONS = SUPPORTED_EXTENSIONS + STORAGE_ONLY_EXTENSIONS
 
 
 class IngestionError(Exception):
@@ -138,7 +144,12 @@ def ingest_document(
     ``pending`` and nothing is processed. Extraction failures mark it
     ``failed`` (not retryable -- the file itself is bad); embedding
     failures also mark it ``failed`` but retryable (transient).
+    Storage-only documents (.csv) are the exception: they need no
+    embeddings and are marked ``ready`` after a readability check.
     """
+    suffix = Path(document.original_filename).suffix.lower()
+    if suffix in STORAGE_ONLY_EXTENSIONS:
+        return _ingest_storage_only(document)
     try:
         with document.file.open('rb') as stored:
             content = stored.read()
@@ -202,6 +213,37 @@ def reingest_document(
     """
     document.chunks.all().delete()
     return ingest_document(document, embedder=embedder)
+
+
+def _ingest_storage_only(document: Document) -> IngestResult:
+    """Mark a storage-only document ready after a readability check.
+
+    No chunking, no embeddings: the analyzer owns CSV parsing, so a
+    malformed CSV uploads fine and fails honestly (a structured error
+    block) when analyzed in chat -- never silently at upload. An
+    unreadable stored file is a real failure and is marked as one.
+    """
+    try:
+        with document.file.open('rb') as stored:
+            stored.read()
+    except OSError as exc:
+        return _mark_failed(
+            document,
+            IngestionError(f'could not read the stored file: {exc}'),
+            retryable=False,
+        )
+    document.status = Document.Status.READY
+    document.failure_reason = ''
+    document.save(update_fields=['status', 'failure_reason', 'updated_at'])
+    return IngestResult(
+        document_id=document.pk,
+        status=Document.Status.READY,
+        chunk_count=0,
+        detail=(
+            'Storage-only document: stored for the wafer analyzer. It is not '
+            'chunked or embedded, so chat retrieval does not search it.'
+        ),
+    )
 
 
 def _mark_failed(

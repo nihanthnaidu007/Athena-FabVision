@@ -108,6 +108,28 @@ Errors follow the JSON error contract:
  "code": "validation_error", "request_id": "..."}
 ```
 
+### Wafer CSVs are storage-only
+
+CSV documents are never chunked or embedded — they are stored verbatim for
+the wafer-map analyzer, which reads them through the `path` argument using
+the storage name returned at upload (`file_path`). Uploads of CSVs always
+report `status: "ready"` with `chunks: 0` regardless of API keys; malformed
+content surfaces later as a structured `error` tool block when analyzed.
+
+### One-click example — `POST /kb/documents/example-wafer/`
+
+Copies the bundled `fabtools/examples/wafer_map_example.csv` into the
+calling user's knowledge base as a storage-only document. A repeated call
+for the same user is a no-op (dedup by content hash) and reports
+`duplicate: true`; each user gets their own copy.
+
+```bash
+curl -s -b cookies.txt -H "X-CSRFToken: $CSRF" -H "Referer: $BASE/" \
+  -X POST $BASE/kb/documents/example-wafer/
+# {"document_id": 9, "status": "ready", "chunks": 0, "detail": "...",
+#  "file_path": "documents/2026/09/18/wafer_map_example.csv", ...}
+```
+
 ## Retired endpoint — `POST /agent/ask/`
 
 The legacy one-shot shim (which answered canned keyword-routed responses
