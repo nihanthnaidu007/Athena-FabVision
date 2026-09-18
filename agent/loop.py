@@ -15,6 +15,7 @@ keeps its partial answer.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -157,9 +158,14 @@ async def _fetch_context(
     """
     if retrieve is None:
         return []
+    # The wired retrieval source is a plain sync function doing ORM work;
+    # off-load it to a thread so ASGI contexts never trip Django's
+    # sync-only guard (retrieval silently degraded to "no context"
+    # otherwise). Async sources pass through unchanged.
+    call = retrieve if inspect.iscoroutinefunction(retrieve) else sync_to_async(retrieve)
     try:
         raw = await tool_registry.maybe_await(
-            retrieve(user=user, query=query, k=RETRIEVAL_K, notebook_id=notebook_id)
+            call(user=user, query=query, k=RETRIEVAL_K, notebook_id=notebook_id)
         )
     except Exception:
         logger.exception('Retrieval source failed; answering without KB context.')

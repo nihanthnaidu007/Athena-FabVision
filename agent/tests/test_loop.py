@@ -22,7 +22,7 @@ from agent.loop import (
     run_agent,
 )
 from agent.registry import ToolRegistry
-from assistant.models import Conversation, Message, UsageEvent
+from assistant.models import Chunk, Conversation, Document, Message, UsageEvent
 
 from .fakes import FakeLLM, async_test, delta, echo_tool, failing_tool, tool_call, usage
 
@@ -329,6 +329,54 @@ async def test_retrieval_without_notebook_receives_none_whole_kb(db, user, conve
     await run_turn([[delta("ok."), usage()]], user, conversation, retrieve=retrieve)
 
     assert captured["notebook_id"] is None
+
+
+def test_sync_retrieval_source_runs_offloaded_from_the_event_loop(
+    transactional_db, user, conversation, monkeypatch
+):
+    """Regression: the wired sync retrieve must run off the event loop.
+
+    The registry wires the plain sync ``rag.retrieval.retrieve``; called
+    inline inside the loop it raised SynchronousOnlyOperation under ASGI,
+    which the loop swallowed -- every streamed answer degraded to "no
+    document context" in the browser. The real sync source must be
+    off-loaded to a thread and its sources surfaced.
+    """
+    from rag import retrieval as rag_retrieval
+    from rag.tests.fakes import FakeEmbedder
+
+    document = Document.objects.create(
+        user=user,
+        original_filename='runbook.txt',
+        file_type='txt',
+        sha256='0' * 64,
+        status=Document.Status.READY,
+    )
+    embedder = FakeEmbedder()
+    Chunk.objects.create(
+        document=document,
+        index=0,
+        content='wafer yield summary',
+        content_hash='chunk-0',
+        embedding=embedder.embed(['wafer yield summary'])[0],
+    )
+    monkeypatch.setattr(rag_retrieval, 'default_embedder', lambda: embedder)
+
+    async def _scenario():
+        return await run_turn(
+            [[delta("Cited answer."), usage()]],
+            user,
+            conversation,
+            retrieve=rag_retrieval.retrieve,
+            user_input='wafer',
+        )
+
+    events = asyncio.run(_scenario())
+
+    sources_event = next(e for e in events if e.type == "sources")
+    assert [source["title"] for source in sources_event.data["sources"]] == ["runbook.txt"]
+    assistant = conversation.messages.get(role=Message.Role.ASSISTANT)
+    assert len(assistant.sources) == 1
 
 
 def test_history_is_sent_oldest_first_before_new_turn(transactional_db, user, conversation):
