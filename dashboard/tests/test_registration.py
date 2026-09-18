@@ -15,15 +15,10 @@ from rag.tests.storage import TempMediaMixin
 
 User = get_user_model()
 
-# Thrown-away fixture credentials, built through a variable so secret
-# scanners do not mistake a quoted literal after 'password1' for a
-# leaked credential (the POST keys themselves are fixed by Django).
-TEST_PASSWORD = 'quantum-wafer-42'
-
 VALID_PAYLOAD = {
     'username': 'newstudent',
-    'password1': TEST_PASSWORD,
-    'password2': TEST_PASSWORD,
+    'password1': 'quantum-wafer-42',
+    'password2': 'quantum-wafer-42',
 }
 
 
