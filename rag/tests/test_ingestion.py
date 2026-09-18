@@ -8,13 +8,14 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import SimpleTestCase, TestCase
 
-from assistant.models import Document
+from assistant.models import Chunk, Document
 from rag.ingestion import (
     IngestionError,
     UnsupportedFileType,
     chunk_text,
     extract_text,
     ingest_document,
+    reingest_document,
 )
 from rag.tests.fakes import FakeEmbedder
 from rag.tests.storage import TempMediaMixin
@@ -199,3 +200,45 @@ class IngestDocumentTests(TempMediaMixin, TestCase):
         # Identical content is embedded exactly once: the second ingest
         # reused the vectors cached on the first document's chunks.
         self.assertEqual(len(embedder.embed_calls), 1)
+
+
+class ReingestDocumentTests(TempMediaMixin, TestCase):
+    """The KB manager's retry path: idempotent re-ingestion of stored documents."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user('alice')
+
+    def make_document(self, content: bytes, filename: str = 'notes.txt') -> Document:
+        document = Document.objects.create(
+            user=self.user,
+            original_filename=filename,
+            file_type='txt',
+            sha256='0' * 64,
+        )
+        document.file.save(filename, ContentFile(content), save=True)
+        return document
+
+    def test_reingest_clears_stale_chunks_and_rebuilds(self):
+        document = self.make_document(b'wafer yield summary ' * 60)
+        # Simulate partial state: a chunk exists while the document is
+        # still pending. Re-ingestion must start from a clean slate --
+        # the unique (document, index) constraint would reject duplicates.
+        Chunk.objects.create(document=document, index=0, content='stale', content_hash='stale')
+
+        result = reingest_document(document, embedder=FakeEmbedder())
+
+        self.assertEqual(result.status, Document.Status.READY)
+        indexes = list(document.chunks.order_by('index').values_list('index', flat=True))
+        self.assertEqual(indexes, list(range(result.chunk_count)))
+        self.assertNotIn('stale', [chunk.content for chunk in document.chunks.all()])
+
+    def test_reingest_without_embedder_stays_pending(self):
+        document = self.make_document(b'wafer yield summary ' * 60)
+
+        result = reingest_document(document)  # no embedder, no key configured
+
+        self.assertEqual(result.status, Document.Status.PENDING)
+        self.assertTrue(result.retryable)
+        document.refresh_from_db()
+        self.assertEqual(document.chunks.count(), 0)
