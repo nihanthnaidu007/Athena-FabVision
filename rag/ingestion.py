@@ -188,6 +188,22 @@ def ingest_document(
     )
 
 
+def reingest_document(
+    document: Document, *, embedder: EmbeddingClient | None = None
+) -> IngestResult:
+    """Re-run ingestion on a stored document -- the KB manager's retry path.
+
+    Clears any stale chunks first: a clean pending/failed document has
+    none, but the guard makes re-ingestion idempotent however the
+    document reached its current state. Delegates to the normal pipeline
+    so status, failure_reason, and chunks update exactly as on first
+    upload -- including the honest ``pending`` outcome when no embedder
+    is configured.
+    """
+    document.chunks.all().delete()
+    return ingest_document(document, embedder=embedder)
+
+
 def _mark_failed(
     document: Document, exc: Exception, *, retryable: bool, prefix: str = 'Ingestion failed'
 ) -> IngestResult:

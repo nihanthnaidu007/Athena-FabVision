@@ -72,6 +72,12 @@ jobs:
   gitleaks:
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # gitleaks-action v2 reads PR commits via the API in pull_request
+      # events (GET /pulls/{n}/commits); the token-level default denies it
+      # without this, 403ing before any scan runs.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
