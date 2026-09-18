@@ -248,3 +248,40 @@ class UsageEvent(models.Model):
 
     def __str__(self):
         return f'{self.kind} event for user {self.user_id}'
+
+
+class MessageFeedback(models.Model):
+    """The user's rating of one assistant message (the per-message trust loop).
+
+    Unlike the Message/Chunk detail rows, feedback is authored data and
+    carries its own ``user`` FK. It is unique per (user, message): a
+    changed mind upserts the same row, so the dashboard's ratios always
+    reflect each user's current verdict -- never a click history.
+    """
+
+    class Value(models.TextChoices):
+        UP = 'up'
+        DOWN = 'down'
+
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='feedback')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='message_feedback'
+    )
+    value = models.CharField(max_length=4, choices=Value.choices)
+    note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = UserScopedManager()
+
+    class Meta:
+        ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['message', 'user'], name='unique_feedback_per_user_message'
+            )
+        ]
+        indexes = [models.Index(fields=['user', '-updated_at'])]
+
+    def __str__(self):
+        return f'{self.value} on message {self.message_id} by user {self.user_id}'

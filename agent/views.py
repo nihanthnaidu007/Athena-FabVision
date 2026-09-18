@@ -18,7 +18,7 @@ from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import APIView
 
-from assistant.models import ApiKey, Conversation, Message
+from assistant.models import ApiKey, Conversation, Message, MessageFeedback
 from django_agent.logging_context import get_request_id
 
 from .llm import default_client
@@ -243,3 +243,44 @@ def delete_conversation(request: HttpRequest, pk: int) -> HttpResponse:
     conversation = get_object_or_404(Conversation.objects.for_user(request.user), pk=pk)
     conversation.delete()
     return redirect('chat-home')
+
+
+@login_required
+@require_POST
+def message_feedback(request: HttpRequest) -> HttpResponse:
+    """Record, change, or clear the user's feedback on one assistant message.
+
+    Body: ``message_id`` plus ``value`` (``up`` | ``down`` | ``none``).
+    ``up``/``down`` upsert the one feedback row per user+message;
+    ``none`` removes it, so the dashboard ratio always reflects each
+    user's current verdict. A Message is reachable only through its
+    conversation's owner, so another user's message 404s; user/system
+    messages and unknown values 400 -- failures are surfaced, never
+    silent.
+    """
+    message = get_object_or_404(
+        Message.objects.filter(conversation__user=request.user),
+        pk=_safe_pk(request.POST.get('message_id')),
+    )
+    value = str(request.POST.get('value') or '').strip()
+    if value not in ('up', 'down', 'none'):
+        return HttpResponseBadRequest('Unknown feedback value.')
+    if message.role != Message.Role.ASSISTANT:
+        return HttpResponseBadRequest('Feedback is collected on assistant messages only.')
+    if value == 'none':
+        MessageFeedback.objects.for_user(request.user).filter(message=message).delete()
+        return JsonResponse({'message_id': message.pk, 'value': None})
+    # Lookup keys mirror the uniqueness contract exactly -- passing the
+    # user in the lookup (not a for_user queryset filter) is what keeps
+    # the upsert from ever touching or creating another user's row.
+    # An absent note leaves any stored note alone; an explicit (possibly
+    # empty) one is the client saying "this is the note now".
+    defaults = {'value': value}
+    if request.POST.get('note') is not None:
+        defaults['note'] = request.POST['note']
+    feedback, _created = MessageFeedback.objects.update_or_create(
+        message=message,
+        user=request.user,
+        defaults=defaults,
+    )
+    return JsonResponse({'message_id': message.pk, 'value': feedback.value})
