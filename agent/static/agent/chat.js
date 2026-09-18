@@ -406,6 +406,79 @@
         });
     }
 
+    // ---------- per-message feedback (the trust loop's write path) ----------
+
+    function renderFeedbackControls(article, messageId, savedValue, feedbackUrl, csrfToken) {
+        // Thumbs on assistant messages. History passes the persisted
+        // verdict (data-feedback); a fresh turn calls this once its
+        // turn_saved event has delivered the message id. Clicking the
+        // active thumb clears the verdict; failures revert the toggle
+        // and say so -- never silent.
+        if (!feedbackUrl || !messageId || article.querySelector('.feedback')) return;
+        var row = el('div', 'feedback');
+        row.setAttribute('data-feedback-for', messageId);
+        var statusText = el('span', 'feedback-status muted small');
+
+        function value() {
+            return row.getAttribute('data-value') || '';
+        }
+        function setActive(next) {
+            upButton.classList.toggle('on', next === 'up');
+            downButton.classList.toggle('on', next === 'down');
+            upButton.setAttribute('aria-pressed', next === 'up' ? 'true' : 'false');
+            downButton.setAttribute('aria-pressed', next === 'down' ? 'true' : 'false');
+            row.classList.toggle('has-value', next === 'up' || next === 'down');
+            row.setAttribute('data-value', next);
+        }
+        function setStatus(message) {
+            statusText.textContent = message || '';
+            statusText.hidden = !message;
+        }
+        function send(next) {
+            var previous = value();
+            setActive(next);
+            setStatus('');
+            var body = new FormData();
+            body.append('message_id', messageId);
+            body.append('value', next);
+            fetch(feedbackUrl, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': csrfToken },
+                body: body
+            }).then(function (response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            }).then(function (payload) {
+                setActive(payload.value || '');
+            }).catch(function () {
+                setActive(previous);
+                setStatus('Could not save feedback — try again.');
+            });
+        }
+
+        var upButton = el('button', 'feedback-btn feedback-up', '\ud83d\udc4d');
+        upButton.type = 'button';
+        upButton.title = 'Helpful';
+        upButton.setAttribute('aria-label', 'Mark this answer helpful');
+        var downButton = el('button', 'feedback-btn feedback-down', '\ud83d\udc4e');
+        downButton.type = 'button';
+        downButton.title = 'Not helpful';
+        downButton.setAttribute('aria-label', 'Mark this answer not helpful');
+
+        upButton.addEventListener('click', function () {
+            send(value() === 'up' ? 'none' : 'up');
+        });
+        downButton.addEventListener('click', function () {
+            send(value() === 'down' ? 'none' : 'down');
+        });
+
+        row.appendChild(statusText);
+        row.appendChild(upButton);
+        row.appendChild(downButton);
+        setActive(savedValue || '');
+        article.appendChild(row);
+    }
+
     // ---------- history hydration (json_script payloads from the template) ----------
 
     function jsonFromScript(id) {
@@ -418,7 +491,7 @@
         }
     }
 
-    function hydrateHistory(thread) {
+    function hydrateHistory(thread, feedbackUrl, csrfToken) {
         var messages = thread.querySelectorAll('.message');
         Array.prototype.forEach.call(messages, function (article) {
             var role = article.getAttribute('data-role');
@@ -441,6 +514,15 @@
                 (Array.isArray(blocks) ? blocks : []).forEach(function (block) {
                     blocksFor.appendChild(renderToolBlock(block));
                 });
+            }
+            if (role === 'assistant') {
+                renderFeedbackControls(
+                    article,
+                    article.getAttribute('data-message-id'),
+                    article.getAttribute('data-feedback') || '',
+                    feedbackUrl,
+                    csrfToken
+                );
             }
         });
     }
@@ -474,6 +556,7 @@
             exampleWaferUrl: root.getAttribute('data-example-wafer-url') || '',
             chatHomeUrl: root.getAttribute('data-chat-home-url'),
             modeUrl: root.getAttribute('data-mode-url') || '',
+            feedbackUrl: root.getAttribute('data-feedback-url') || '',
             // The server renders the active conversation's mode; a fresh
             // page starts in assistant mode until the student toggles.
             mode: tutorToggle && tutorToggle.getAttribute('aria-pressed') === 'true'
@@ -539,7 +622,8 @@
                 text: '',
                 indicator: null,
                 pendingFrame: false,
-                complete: false
+                complete: false,
+                savedMessageId: ''
             };
         }
 
@@ -686,11 +770,25 @@
                     renderChips(turn.chips, data.sources || []);
                     scrollBottom();
                     break;
+                case 'turn_saved':
+                    // Emitted after persistence; carries the assistant
+                    // message's pk -- the per-message feedback hook.
+                    turn.savedMessageId = data.message_id ? String(data.message_id) : '';
+                    break;
                 case 'done':
                     turn.complete = true;
                     turn.article.classList.remove('streaming');
                     hideIndicator(turn);
                     addTurnFooter(turn, data.latency_ms);
+                    if (turn.savedMessageId) {
+                        renderFeedbackControls(
+                            turn.article,
+                            turn.savedMessageId,
+                            '',
+                            state.feedbackUrl,
+                            csrf
+                        );
+                    }
                     break;
                 case 'error':
                     hideIndicator(turn);
@@ -996,7 +1094,7 @@
             }
         });
 
-        hydrateHistory(thread);
+        hydrateHistory(thread, state.feedbackUrl, csrf);
         scrollBottom(true);
     }
 

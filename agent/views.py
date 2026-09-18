@@ -18,7 +18,7 @@ from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import APIView
 
-from assistant.models import ApiKey, Conversation, Message
+from assistant.models import ApiKey, Conversation, Message, MessageFeedback
 from django_agent.logging_context import get_request_id
 
 from .llm import default_client
@@ -89,8 +89,9 @@ class AgentStreamView(APIView):
     is honored only at creation -- an existing conversation's persisted
     mode always rules; the chat-mode endpoint changes it. The response
     streams ``event: <type>`` / ``data: <json>`` frames for status, delta,
-    tool_call, tool_result, sources, done, and error events; failures
-    inside the turn are error events, never a broken stream.
+    tool_call, tool_result, sources, turn_saved (the persisted assistant
+    message's pk, the per-message feedback hook), done, and error events;
+    failures inside the turn are error events, never a broken stream.
     """
 
     renderer_classes = [JSONRenderer]
@@ -144,13 +145,23 @@ class AgentStreamView(APIView):
 SIDEBAR_CONVERSATION_LIMIT = 50
 
 
-def _message_items(messages: list[Message]) -> list[dict[str, Any]]:
+def _message_items(messages: list[Message], user: Any) -> list[dict[str, Any]]:
     """View-model rows for the thread template.
 
     Each row carries deterministic ``json_script`` element ids so
     ``chat.js`` can hydrate markdown, citation chips, and tool blocks
-    from the persisted JSON fields.
+    from the persisted JSON fields. Assistant rows also carry the
+    user's saved feedback verdict (``''`` when none), which the client
+    renders as the active thumb -- one extra query for the whole page.
     """
+    feedback_by_message: dict[int, str] = {}
+    assistant_pks = [message.pk for message in messages if message.role == Message.Role.ASSISTANT]
+    if user is not None and assistant_pks:
+        feedback_by_message = dict(
+            MessageFeedback.objects.for_user(user)
+            .filter(message_id__in=assistant_pks)
+            .values_list('message_id', 'value')
+        )
     items: list[dict[str, Any]] = []
     for message in messages:
         pk = str(message.pk)
@@ -160,6 +171,7 @@ def _message_items(messages: list[Message]) -> list[dict[str, Any]]:
                 'content_id': f'msg-{pk}-content',
                 'sources_id': f'msg-{pk}-sources',
                 'blocks_id': f'msg-{pk}-blocks',
+                'feedback_value': feedback_by_message.get(message.pk, ''),
             }
         )
     return items
@@ -200,7 +212,7 @@ def chat_home(request: HttpRequest) -> HttpResponse:
         {
             'conversation_items': _conversation_items(request.user, active_pk),
             'active_conversation': active_conversation,
-            'message_items': _message_items(messages),
+            'message_items': _message_items(messages, request.user),
             'llm_configured': default_client() is not None,
         },
     )
@@ -243,3 +255,44 @@ def delete_conversation(request: HttpRequest, pk: int) -> HttpResponse:
     conversation = get_object_or_404(Conversation.objects.for_user(request.user), pk=pk)
     conversation.delete()
     return redirect('chat-home')
+
+
+@login_required
+@require_POST
+def message_feedback(request: HttpRequest) -> HttpResponse:
+    """Record, change, or clear the user's feedback on one assistant message.
+
+    Body: ``message_id`` plus ``value`` (``up`` | ``down`` | ``none``).
+    ``up``/``down`` upsert the one feedback row per user+message;
+    ``none`` removes it, so the dashboard ratio always reflects each
+    user's current verdict. A Message is reachable only through its
+    conversation's owner, so another user's message 404s; user/system
+    messages and unknown values 400 -- failures are surfaced, never
+    silent.
+    """
+    message = get_object_or_404(
+        Message.objects.filter(conversation__user=request.user),
+        pk=_safe_pk(request.POST.get('message_id')),
+    )
+    value = str(request.POST.get('value') or '').strip()
+    if value not in ('up', 'down', 'none'):
+        return HttpResponseBadRequest('Unknown feedback value.')
+    if message.role != Message.Role.ASSISTANT:
+        return HttpResponseBadRequest('Feedback is collected on assistant messages only.')
+    if value == 'none':
+        MessageFeedback.objects.for_user(request.user).filter(message=message).delete()
+        return JsonResponse({'message_id': message.pk, 'value': None})
+    # Lookup keys mirror the uniqueness contract exactly -- passing the
+    # user in the lookup (not a for_user queryset filter) is what keeps
+    # the upsert from ever touching or creating another user's row.
+    # An absent note leaves any stored note alone; an explicit (possibly
+    # empty) one is the client saying "this is the note now".
+    defaults = {'value': value}
+    if request.POST.get('note') is not None:
+        defaults['note'] = request.POST['note']
+    feedback, _created = MessageFeedback.objects.update_or_create(
+        message=message,
+        user=request.user,
+        defaults=defaults,
+    )
+    return JsonResponse({'message_id': message.pk, 'value': feedback.value})

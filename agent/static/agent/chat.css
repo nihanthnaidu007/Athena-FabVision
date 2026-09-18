@@ -629,6 +629,40 @@ body {
     padding: 2px 8px;
 }
 
+/* ----- per-message feedback (thumbs on assistant messages) ----- */
+
+.feedback {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    /* Faint until the message is hovered, so the thread stays quiet;
+       a recorded verdict keeps its controls fully visible. */
+    opacity: 0.45;
+    transition: opacity 0.15s ease;
+}
+
+.message:hover > .feedback, .feedback.has-value { opacity: 1; }
+
+.feedback-btn {
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    padding: 1px 9px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    cursor: pointer;
+}
+
+.feedback-btn:hover { background: #f2f5f8; }
+
+.feedback-btn.on {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.feedback-status { color: var(--danger); font-size: 12px; }
+
 /* ----- narrow screens ----- */
 
 @media (max-width: 760px) {

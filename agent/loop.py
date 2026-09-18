@@ -7,10 +7,10 @@ blocks back into the model round by round.
 
 ``run_agent`` is an async generator yielding typed agent events:
 ``status``, ``delta``, ``tool_call``, ``tool_result``, ``sources``,
-``done``, ``error``. Any failure becomes an ``error`` event; the
-stream degrades, it never dies. Assistant text produced before a
-failure is still persisted, so an aborted or failing turn keeps its
-partial answer.
+``turn_saved``, ``done``, ``error``. Any failure becomes an ``error``
+event; the stream degrades, it never dies. Assistant text produced
+before a failure is still persisted, so an aborted or failing turn
+keeps its partial answer.
 """
 
 from __future__ import annotations
@@ -70,6 +70,7 @@ EVENT_DELTA = 'delta'
 EVENT_TOOL_CALL = 'tool_call'
 EVENT_TOOL_RESULT = 'tool_result'
 EVENT_SOURCES = 'sources'
+EVENT_TURN_SAVED = 'turn_saved'
 EVENT_DONE = 'done'
 EVENT_ERROR = 'error'
 
@@ -187,6 +188,7 @@ async def run_agent(
     kb_context: list[dict[str, Any]] = []
     usage = {'tokens_in': 0, 'tokens_out': 0}
     turn_persisted = False
+    persisted_message_id: int | None = None
 
     def _rid(data: dict) -> dict:
         return {**data, 'request_id': request_id}
@@ -200,7 +202,7 @@ async def run_agent(
         Only turns that produced content are persisted: a stream that
         failed before any output leaves just the user message behind.
         """
-        nonlocal turn_persisted
+        nonlocal turn_persisted, persisted_message_id
         if turn_persisted or not (text_parts or tool_blocks):
             return
         turn_persisted = True
@@ -217,6 +219,7 @@ async def run_agent(
         except Exception:
             logger.exception('Failed to persist assistant message (rid=%s).', request_id)
             return
+        persisted_message_id = assistant_message.pk
         try:
             await sync_to_async(record_usage)(
                 user=user,
@@ -331,6 +334,15 @@ async def run_agent(
 
         sources = _final_sources()
         yield AgentEvent(EVENT_SOURCES, _rid({'sources': sources}))
+        # Persist before ``done`` so the client can learn the assistant
+        # message's pk while the turn is still live -- the hook the
+        # per-message feedback UI hangs from. Additive event: consumers
+        # that ignore unknown event types keep working unchanged. The
+        # ``finally`` below stays as the failure-path safety net; this
+        # call is idempotent.
+        await _persist_turn()
+        if persisted_message_id is not None:
+            yield AgentEvent(EVENT_TURN_SAVED, _rid({'message_id': persisted_message_id}))
         latency_ms = int((time.monotonic() - t0) * 1000)
         yield AgentEvent(
             EVENT_DONE,

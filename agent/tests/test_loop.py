@@ -92,6 +92,7 @@ async def test_event_sequence_with_tool_round_trip(db, user, conversation):
         "status",
         "delta",
         "sources",
+        "turn_saved",
         "done",
     ]
     assert [e.data["stage"] for e in events if e.type == "status"] == [
@@ -297,7 +298,7 @@ async def test_retrieval_failure_degrades_to_empty_context(db, user, conversatio
         retrieve=broken_retrieve,
     )
 
-    assert event_types(events)[-2:] == ["sources", "done"]
+    assert event_types(events)[-3:] == ["sources", "turn_saved", "done"]
     assert next(e for e in events if e.type == "sources").data["sources"] == []
 
 
@@ -537,3 +538,34 @@ def test_tutor_turn_persists_like_any_turn(transactional_db, user, conversation)
         ("assistant", "Hint: check the edge ring."),
     ]
     assert UsageEvent.objects.count() == 1
+
+
+def test_turn_saved_event_carries_assistant_message_id(user, conversation):
+    """The turn_saved event exposes the persisted assistant pk (feedback hook)."""
+
+    async def _scenario():
+        return await run_turn([[delta("Hello.")]], user, conversation)
+
+    events = asyncio.run(_scenario())
+
+    saved = [event for event in events if event.type == "turn_saved"]
+    assert len(saved) == 1
+    assistant = conversation.messages.get(role=Message.Role.ASSISTANT)
+    assert saved[0].data["message_id"] == assistant.pk
+    # done still terminates the stream, after the save notice.
+    assert event_types(events)[-1] == "done"
+
+
+def test_failed_turn_persists_partial_without_turn_saved(user, conversation):
+    """A turn that fails mid-stream keeps its partial answer but never
+    emits turn_saved: the client has no pk to hang feedback on, which is
+    honest -- there is no complete answer to rate."""
+
+    async def _scenario():
+        script = [[delta("Partial answer "), RuntimeError("boom")]]
+        return await run_turn(script, user, conversation)
+
+    events = asyncio.run(_scenario())
+
+    assert not [event for event in events if event.type == "turn_saved"]
+    assert conversation.messages.get(role=Message.Role.ASSISTANT).content == "Partial answer "

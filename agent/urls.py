@@ -5,6 +5,7 @@ from .views import (
     agent_ask_gone,
     agent_home,
     delete_conversation,
+    message_feedback,
     new_conversation,
     set_conversation_mode,
 )
@@ -16,4 +17,5 @@ urlpatterns = [
     path('chat/new/', new_conversation, name='chat-new'),
     path('chat/mode/', set_conversation_mode, name='chat-mode'),
     path('chat/<int:pk>/delete/', delete_conversation, name='chat-delete'),
+    path('feedback/', message_feedback, name='message-feedback'),
 ]
