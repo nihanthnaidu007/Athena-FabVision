@@ -16,6 +16,7 @@
      data-conversation-id="{{ active_conversation.pk|default:'' }}"
      data-stream-url="{% url 'agent-stream' %}"
      data-upload-url="{% url 'kb-document-upload' %}"
+     data-example-wafer-url="{% url 'kb-document-example-wafer' %}"
      data-new-chat-url="{% url 'chat-new' %}"
      data-chat-home-url="{% url 'chat-home' %}"
      data-mode-url="{% url 'chat-mode' %}"
@@ -98,9 +99,11 @@
                 <span class="mode-status" id="mode-status" hidden></span>
             </div>
             <form id="composer-form" autocomplete="off">
-                <input type="file" id="kb-file-input" accept=".txt,.md,.pdf" hidden>
+                <input type="file" id="kb-file-input" accept=".txt,.md,.pdf,.csv" hidden>
                 <button type="button" id="upload-button" class="composer-btn"
-                        title="Upload a .txt, .md, or .pdf to your knowledge base">📎</button>
+                        title="Upload a .txt, .md, .pdf, or .csv to your knowledge base">📎</button>
+                <button type="button" id="example-wafer-button" class="composer-btn example-btn"
+                        title="Load the example wafer CSV into your knowledge base">🧪</button>
                 <textarea id="composer-input" rows="1"
                           placeholder="Ask Athena about your fab data…"></textarea>
                 <button type="submit" id="send-button" class="send-btn">Send</button>

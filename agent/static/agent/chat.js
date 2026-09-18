@@ -288,6 +288,7 @@
         var sendButton = $('#send-button');
         var stopButton = $('#stop-button');
         var uploadButton = $('#upload-button');
+        var exampleButton = $('#example-wafer-button');
         var fileInput = $('#kb-file-input');
         var uploadStatus = $('#upload-status');
         var conversationList = $('#conversation-list');
@@ -298,6 +299,7 @@
             conversationId: root.getAttribute('data-conversation-id') || '',
             streamUrl: root.getAttribute('data-stream-url'),
             uploadUrl: root.getAttribute('data-upload-url'),
+            exampleWaferUrl: root.getAttribute('data-example-wafer-url') || '',
             chatHomeUrl: root.getAttribute('data-chat-home-url'),
             modeUrl: root.getAttribute('data-mode-url') || '',
             // The server renders the active conversation's mode; a fresh
@@ -595,6 +597,65 @@
             });
         }
 
+        // ----- wafer CSV handoff (storage-only documents -> analyzer) -----
+
+        function addAnalyzeAffordance(container, filePath) {
+            // One click from a stored CSV to the analyzer: the turn asks
+            // for the analysis by storage name; the agent calls
+            // wafer_map_analyze(path=...) through its schema.
+            var btn = el('button', 'upload-analyze-btn', 'Analyze with the wafer tool');
+            btn.type = 'button';
+            btn.addEventListener('click', function () {
+                if (state.streaming) return;
+                btn.disabled = true;
+                runTurn('Analyze the wafer CSV stored at "' + filePath +
+                    '" with the wafer map tool.');
+            });
+            container.appendChild(btn);
+        }
+
+        function loadExampleWafer() {
+            if (state.streaming || !state.exampleWaferUrl) return;
+            exampleButton.disabled = true;
+            uploadStatus.hidden = false;
+            uploadStatus.className = 'upload-status';
+            uploadStatus.innerHTML = '';
+            var line = el('div', 'upload-line');
+            var stateText = el('div', 'upload-state muted small', 'Loading example wafer CSV…');
+            line.appendChild(stateText);
+            uploadStatus.appendChild(line);
+
+            fetch(state.exampleWaferUrl, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': csrf }
+            }).then(function (response) {
+                return response.json().catch(function () { return {}; }).then(function (payload) {
+                    return { status: response.status, payload: payload };
+                });
+            }).then(function (result) {
+                var payload = result.payload || {};
+                var ok = result.status === 201 || (result.status === 200 && payload.duplicate);
+                if (ok) {
+                    uploadStatus.classList.add('upload-ok');
+                    stateText.textContent = (result.status === 200
+                        ? '✓ Example wafer CSV is already in your knowledge base.'
+                        : '✓ Example wafer CSV loaded into your knowledge base.');
+                    if (payload.file_path) addAnalyzeAffordance(line, payload.file_path);
+                } else {
+                    // The 503 case: the deployment is missing the bundled
+                    // example. Say so; never pretend it loaded.
+                    uploadStatus.classList.add('upload-error');
+                    stateText.textContent = '✗ Could not load the example wafer CSV (HTTP ' +
+                        result.status + '): ' + (payload.error || 'unavailable on this deployment.');
+                }
+            }).catch(function () {
+                uploadStatus.classList.add('upload-error');
+                stateText.textContent = '✗ Could not load the example wafer CSV: network error.';
+            }).finally(function () {
+                exampleButton.disabled = false;
+            });
+        }
+
         // ----- uploads (XHR: fetch has no upload progress events) -----
 
         function uploadFile(file) {
@@ -629,10 +690,18 @@
                 fill.style.width = '100%';
                 if (xhr.status === 201) {
                     uploadStatus.classList.add('upload-ok');
-                    stateText.textContent = '✓ ' + file.name + ' ready — ' +
-                        (payload && payload.chunks !== undefined
-                            ? payload.chunks + ' chunks embedded.'
-                            : 'embedded.');
+                    if (payload && payload.file_path) {
+                        // CSV: storage-only document, zero chunks by design.
+                        // Offer the one-click handoff to the analyzer.
+                        stateText.textContent = '✓ ' + file.name +
+                            ' ready — stored for the wafer analyzer.';
+                        addAnalyzeAffordance(line, payload.file_path);
+                    } else {
+                        stateText.textContent = '✓ ' + file.name + ' ready — ' +
+                            (payload && payload.chunks !== undefined
+                                ? payload.chunks + ' chunks embedded.'
+                                : 'embedded.');
+                    }
                 } else if (xhr.status === 202) {
                     // Degraded mode: stored, embeddings unavailable. Quote the
                     // server's honest detail instead of pretending success.
@@ -741,6 +810,10 @@
             if (file) uploadFile(file);
             fileInput.value = '';
         });
+
+        if (exampleButton) {
+            exampleButton.addEventListener('click', loadExampleWafer);
+        }
 
         document.addEventListener('submit', function (event) {
             var formEl = event.target;

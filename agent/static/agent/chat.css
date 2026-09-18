@@ -472,6 +472,25 @@ body {
 .upload-status.upload-error { border-color: #f0b9b7; background: #fdf1f0; }
 .upload-status.upload-error .upload-state { color: #922f2b; }
 
+/* One-click handoff from a stored wafer CSV to the analyzer (feature 2). */
+.upload-analyze-btn {
+    margin-top: 6px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: var(--accent);
+    color: #ffffff;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.upload-analyze-btn:hover {
+    background: var(--accent-dark);
+    border-color: var(--accent-dark);
+}
+
+.upload-analyze-btn:disabled { opacity: 0.55; cursor: default; }
+
 #composer-form {
     display: flex;
     align-items: flex-end;
