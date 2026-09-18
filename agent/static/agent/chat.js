@@ -82,6 +82,12 @@
         return (suffix === '%' ? (num * 100).toFixed(1) + '%' : num.toFixed(2));
     }
 
+    // fixed-decimal formatter shared by the SPC card and its run chart
+    function fmt(value, digits) {
+        var num = Number(value);
+        return isNaN(num) ? 'n/a' : num.toFixed(digits === undefined ? 2 : digits);
+    }
+
     function renderTableBlock(block) {
         var card = el('div', 'tool-card');
         card.appendChild(el('div', 'tool-card-title', block.title || 'Tool result'));
@@ -168,11 +174,6 @@
         var card = el('div', 'tool-card spc-card');
         card.appendChild(el('div', 'tool-card-title', block.title || 'SPC control-chart check'));
         if (block.summary) card.appendChild(el('div', 'tool-card-summary', block.summary));
-
-        function fmt(value, digits) {
-            var num = Number(value);
-            return isNaN(num) ? 'n/a' : num.toFixed(digits === undefined ? 2 : digits);
-        }
 
         var hasLimits = typeof block.ucl === 'number' && typeof block.lcl === 'number';
         var sigmaLabel = block.sigma_source === 'provided' ? 'known' : 'estimated';
