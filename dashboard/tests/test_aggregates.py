@@ -146,15 +146,15 @@ class BreakdownsTests(TestCase):
         self.assertEqual(result['model'][0]['tokens_out'], 22)
         # 'unspecified' (2 events) outranks the one stamped tool call.
         self.assertEqual(
-            [row['label'] for row in result['tool_name']], ['unspecified', 'wafer_map_analyze']
+            [row['label'] for row in result['tool']], ['unspecified', 'wafer_map_analyze']
         )
-        self.assertEqual(result['tool_name'][1]['calls'], 1)
+        self.assertEqual(result['tool'][1]['calls'], 1)
 
     def test_blank_fields_group_under_unspecified(self):
         events = [ev(created_at=NOW, kind='chat')]  # no model, no tool
         result = breakdowns(events, days=7, now=NOW)
         self.assertEqual([row['label'] for row in result['model']], ['unspecified'])
-        self.assertEqual([row['label'] for row in result['tool_name']], ['unspecified'])
+        self.assertEqual([row['label'] for row in result['tool']], ['unspecified'])
         self.assertEqual(result['model'][0]['calls'], 1)
 
     def test_events_outside_window_are_ignored(self):
@@ -174,7 +174,7 @@ class BreakdownsTests(TestCase):
 
     def test_empty_window_gives_empty_breakdowns(self):
         result = breakdowns([], days=7, now=NOW)
-        self.assertEqual(result, {'kind': [], 'model': [], 'tool_name': []})
+        self.assertEqual(result, {'kind': [], 'model': [], 'tool': []})
 
 
 class ChartBarsTests(TestCase):

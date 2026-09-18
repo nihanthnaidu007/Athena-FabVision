@@ -169,7 +169,7 @@ class UsageBreakdownPageTests(TestCase):
         self.assertEqual([row['label'] for row in breakdowns['kind']], ['chat', 'api', 'tool'])
         self.assertEqual(breakdowns['kind'][0]['calls'], 2)
         self.assertEqual(breakdowns['model'][0]['label'], 'gpt-4o-mini')
-        self.assertEqual(breakdowns['tool_name'][1]['label'], 'wafer_map_analyze')
+        self.assertEqual(breakdowns['tool'][1]['label'], 'wafer_map_analyze')
         page = response.content.decode()
         self.assertIn('wafer_map_analyze', page)
         self.assertIn('unspecified', page)  # tool events have no model stamp

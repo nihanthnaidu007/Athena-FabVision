@@ -14,7 +14,10 @@ DEFAULT_RANGE = 7
 ALLOWED_RANGES = (7, 30)
 
 #: UsageEvent fields the dashboard breaks spend down by (spec #12).
-BREAKDOWN_FIELDS = ('kind', 'model', 'tool_name')
+# Dashboard section keys are display names; ``tool_name`` is the UsageEvent
+# column the ``tool`` section reads from. The template renders "By tool".
+BREAKDOWN_FIELDS = ('kind', 'model', 'tool')
+_FIELD_ATTRS = {'kind': 'kind', 'model': 'model', 'tool': 'tool_name'}
 
 
 def parse_days(raw: str | None, allowed: tuple[int, ...] = ALLOWED_RANGES) -> int:
@@ -119,7 +122,7 @@ def breakdowns(events, *, days: int, now) -> dict[str, list[dict]]:
         if not start_date <= day <= end_date:
             continue
         for name in BREAKDOWN_FIELDS:
-            label = str(getattr(event, name, '') or 'unspecified')
+            label = str(getattr(event, _FIELD_ATTRS[name], '') or 'unspecified')
             bucket = grouped[name].setdefault(
                 label, {'calls': 0, 'tokens_in': 0, 'tokens_out': 0}
             )
