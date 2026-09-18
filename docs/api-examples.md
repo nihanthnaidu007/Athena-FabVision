@@ -108,18 +108,19 @@ Errors follow the JSON error contract:
  "code": "validation_error", "request_id": "..."}
 ```
 
-## One-shot REST shim — `POST /agent/ask/`
+## Retired endpoint — `POST /agent/ask/`
 
-A legacy compatibility endpoint that answers canned keyword-routed responses
-without the model. Prefer `/agent/stream/`.
+The legacy one-shot shim (which answered canned keyword-routed responses
+without the model) was retired in v1.1. It now answers a permanent
+`410 Gone` for every method and meters nothing, following the JSON
+error contract:
 
-```bash
-curl -s -H "X-API-Key: $ATHENA_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "tell me a joke"}' \
-  $BASE/agent/ask/
-# {"response": "Why did the process engineer bring a ladder to the fab? To reach the next node."}
+```json
+{"error": "This endpoint was retired; use POST /agent/stream/ for agent turns.",
+ "code": "endpoint_retired", "request_id": "..."}
 ```
+
+Use `POST /agent/stream/` for agent turns.
 
 ## LiveKit voice token — `POST /voice/token/`
 

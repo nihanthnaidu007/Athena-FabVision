@@ -194,7 +194,6 @@ self-hosted single-container deployment.
 | --- | --- | --- | --- |
 | `/` | GET | session | Chat UI (login required) |
 | `/agent/stream/` | POST | session or API key | One agent turn as an SSE stream |
-| `/agent/ask/` | POST | session or API key | Legacy one-shot REST shim |
 | `/kb/documents/` | POST | session or API key | Knowledge-base upload (multipart `file`) |
 | `/voice/` | GET | session | Voice page (both configured/unconfigured states) |
 | `/voice/token/` | POST | session or API key | Mint a LiveKit room token (throttled) |
