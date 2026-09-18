@@ -134,6 +134,63 @@ def test_load_fab_tools_registers_contract_entries():
     assert reg.tool_names() == ["echo"]
 
 
+def test_load_fab_tools_applies_tool_schemas():
+    """A TOOL_SCHEMAS entry upgrades the LLM-facing description and parameters."""
+    reg = fresh_registry()
+    schema = {
+        "description": "Echo things.",
+        "parameters": {"type": "object", "properties": {"value": {"type": "string"}}},
+    }
+    tools_module = stub_module(
+        "tools",
+        TOOLS=[["echo", echo_tool, lambda: True]],
+        TOOL_SCHEMAS={"echo": schema},
+    )
+    package = stub_module("fabtools")
+
+    assert load_fab_tools(reg, stub_importer({"fabtools": package, "fabtools.tools": tools_module}))
+
+    fn = reg.tool_schemas()[0]["function"]
+    assert fn["description"] == "Echo things."
+    assert fn["parameters"]["properties"]["value"]["type"] == "string"
+
+
+def test_load_fab_tools_without_schemas_keeps_generic_shape():
+    reg = fresh_registry()
+    tools_module = stub_module("tools", TOOLS=[["echo", echo_tool, lambda: True]])
+    package = stub_module("fabtools")
+
+    assert load_fab_tools(reg, stub_importer({"fabtools": package, "fabtools.tools": tools_module}))
+
+    fn = reg.tool_schemas()[0]["function"]
+    assert fn["description"] == "Tool echo."
+    assert fn["parameters"] == {"type": "object", "properties": {}}
+
+
+def test_load_fab_tools_malformed_schemas_are_ignored_defensively():
+    reg = fresh_registry()
+    tools_module = stub_module(
+        "tools",
+        TOOLS=[["echo", echo_tool, lambda: True]],
+        TOOL_SCHEMAS="not-a-dict",
+    )
+    package = stub_module("fabtools")
+    assert load_fab_tools(reg, stub_importer({"fabtools": package, "fabtools.tools": tools_module}))
+    assert reg.tool_schemas()[0]["function"]["description"] == "Tool echo."
+
+
+def test_load_fab_tools_malformed_schema_entry_falls_back_to_generic():
+    reg = fresh_registry()
+    tools_module = stub_module(
+        "tools",
+        TOOLS=[["echo", echo_tool, lambda: True]],
+        TOOL_SCHEMAS={"echo": "not-a-schema-dict"},
+    )
+    package = stub_module("fabtools")
+    assert load_fab_tools(reg, stub_importer({"fabtools": package, "fabtools.tools": tools_module}))
+    assert reg.tool_schemas()[0]["function"]["description"] == "Tool echo."
+
+
 def test_load_fab_tools_missing_module_is_noop_not_crash():
     reg = fresh_registry()
     assert load_fab_tools(reg, stub_importer({})) is False

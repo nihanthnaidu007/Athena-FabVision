@@ -12,6 +12,7 @@ from assistant.models import ApiKey, Document
 from rag.tests.fakes import FakeEmbedder
 from rag.tests.storage import TempMediaMixin
 from rag.tests.test_ingestion import build_pdf
+from rag.views import _load_example_wafer_csv
 
 User = get_user_model()
 
@@ -152,3 +153,124 @@ class KbUploadApiTests(TempMediaMixin, TestCase):
         header_id = response.headers.get('X-Request-ID')
         self.assertTrue(header_id)
         self.assertEqual(response.json()['request_id'], header_id)
+
+
+WAFER_CSV = b'wafer_id,x,y,bin\nW1,0,0,1\nW1,1,0,1\nW1,2,0,3\n'
+EXAMPLE_URL = '/kb/documents/example-wafer/'
+
+
+class CsvStorageOnlyUploadTests(TempMediaMixin, TestCase):
+    """CSV uploads are storage-only documents: stored for the wafer
+    analyzer, never chunked or embedded, ready even with no key."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user('alice', password='fab-password-123')
+        self.client = APIClient()
+        self.client.login(username='alice', password='fab-password-123')
+
+    def test_upload_csv_is_ready_without_chunks_or_embedder(self):
+        response = self.client.post(
+            UPLOAD_URL, {'file': SimpleUploadedFile('lot42.csv', WAFER_CSV)}, format='multipart'
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 'ready')
+        self.assertEqual(body['chunks'], 0)
+        self.assertIn('Storage-only', body['detail'])
+        document = Document.objects.get(pk=body['document_id'])
+        self.assertEqual(document.file_type, 'csv')
+        self.assertEqual(document.status, Document.Status.READY)
+        self.assertEqual(document.chunks.count(), 0)
+
+    def test_upload_csv_response_carries_the_storage_file_path(self):
+        # The composer's analyze affordance hands this exact storage name
+        # to the wafer analyzer's path= parameter.
+        response = self.client.post(
+            UPLOAD_URL, {'file': SimpleUploadedFile('lot42.csv', WAFER_CSV)}, format='multipart'
+        )
+
+        body = response.json()
+        document = Document.objects.get(pk=body['document_id'])
+        self.assertEqual(body['file_path'], document.file.name)
+
+    def test_malformed_csv_uploads_storage_only(self):
+        # Upload never parses: the honest failure for malformed CSV is the
+        # analyzer's structured error block at analysis time (pinned in
+        # rag.tests.test_wafer_pipeline).
+        response = self.client.post(
+            UPLOAD_URL, {'file': SimpleUploadedFile('broken.csv', b'id,x,y\nW1,0,0\n')},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['status'], 'ready')
+
+
+class ExampleWaferCsvTests(TempMediaMixin, TestCase):
+    """The one-click example loader: per-user seeding with content dedup."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user('alice', password='fab-password-123')
+        self.client = APIClient()
+        self.client.login(username='alice', password='fab-password-123')
+
+    def post_example(self):
+        return self.client.post(EXAMPLE_URL)
+
+    def test_example_requires_authentication(self):
+        self.client.logout()
+
+        response = self.post_example()
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_example_loads_a_storage_only_copy_of_the_bundle(self):
+        response = self.post_example()
+
+        self.assertEqual(response.status_code, 201, response.content)
+        body = response.json()
+        self.assertEqual(body['status'], 'ready')
+        self.assertEqual(body['chunks'], 0)
+        document = Document.objects.get(pk=body['document_id'])
+        self.assertEqual(document.original_filename, 'wafer_map_example.csv')
+        with document.file.open('rb') as stored:
+            self.assertIn(b'wafer_id,x,y,bin', stored.read())
+        expected_sha = hashlib.sha256(_load_example_wafer_csv()).hexdigest()
+        self.assertEqual(document.sha256, expected_sha)
+
+    def test_example_dedupes_on_a_second_load(self):
+        first = self.post_example()
+
+        second = self.post_example()
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        body = second.json()
+        self.assertTrue(body['duplicate'])
+        self.assertEqual(body['document_id'], first.json()['document_id'])
+        self.assertEqual(Document.objects.count(), 1)
+
+    def test_example_seeds_each_user_their_own_copy(self):
+        other = User.objects.create_user('bob', password='fab-password-123')
+        other_client = APIClient()
+        other_client.login(username='bob', password='fab-password-123')
+
+        mine = self.post_example()
+        theirs = other_client.post(EXAMPLE_URL)
+
+        self.assertEqual(mine.status_code, 201)
+        self.assertEqual(theirs.status_code, 201)
+        self.assertNotEqual(mine.json()['document_id'], theirs.json()['document_id'])
+        self.assertEqual(self.user.documents.count(), 1)
+        self.assertEqual(other.documents.count(), 1)
+
+    def test_example_missing_bundle_is_503_without_side_effects(self):
+        with mock.patch('rag.views._load_example_wafer_csv', return_value=None):
+            response = self.post_example()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['code'], 'service_unavailable')
+        self.assertEqual(Document.objects.count(), 0)
