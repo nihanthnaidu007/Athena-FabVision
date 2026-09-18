@@ -13,6 +13,9 @@ from django.utils import timezone
 DEFAULT_RANGE = 7
 ALLOWED_RANGES = (7, 30)
 
+#: UsageEvent fields the dashboard breaks spend down by (spec #12).
+BREAKDOWN_FIELDS = ('kind', 'model', 'tool_name')
+
 
 def parse_days(raw: str | None, allowed: tuple[int, ...] = ALLOWED_RANGES) -> int:
     """Return the selected window size; anything invalid falls back to the default.
@@ -97,6 +100,40 @@ def usage_summary(events, *, days: int, now) -> dict:
         'avg_latency_ms': round(sum(latencies) / len(latencies)) if latencies else 0,
         'p95_latency_ms': p95(latencies),
         'daily': daily,
+    }
+
+
+def breakdowns(events, *, days: int, now) -> dict[str, list[dict]]:
+    """Group in-window events by ``kind``, ``model``, and ``tool_name``.
+
+    Each breakdown is a list of ``{label, calls, tokens_in, tokens_out}``
+    rows sorted by calls (descending, then label for determinism). Events
+    with an empty field value group under ``unspecified`` -- the dashboard
+    shows unattributed spend rather than hiding it.
+    """
+    end_date = timezone.localdate(now)
+    start_date = end_date - timedelta(days=days - 1)
+    grouped: dict[str, dict[str, dict[str, int]]] = {name: {} for name in BREAKDOWN_FIELDS}
+    for event in events:
+        day = timezone.localdate(event.created_at)
+        if not start_date <= day <= end_date:
+            continue
+        for name in BREAKDOWN_FIELDS:
+            label = str(getattr(event, name, '') or 'unspecified')
+            bucket = grouped[name].setdefault(
+                label, {'calls': 0, 'tokens_in': 0, 'tokens_out': 0}
+            )
+            bucket['calls'] += 1
+            bucket['tokens_in'] += event.tokens_in
+            bucket['tokens_out'] += event.tokens_out
+    return {
+        name: [
+            {'label': label, **totals}
+            for label, totals in sorted(
+                rows.items(), key=lambda item: (-item[1]['calls'], item[0])
+            )
+        ]
+        for name, rows in grouped.items()
     }
 
 
