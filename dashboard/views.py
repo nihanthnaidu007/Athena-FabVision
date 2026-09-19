@@ -22,6 +22,8 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from assistant.models import ApiKey, Document, MessageFeedback, Notebook, UsageEvent
 from rag.ingestion import reingest_document as reingest_document_service
+from study.models import Flashcard, ReviewLog
+from study.scheduler import schedule
 
 from .aggregates import breakdowns, chart_bars, feedback_summary, parse_days, usage_summary
 from .forms import ApiKeyCreateForm
@@ -313,3 +315,56 @@ def assign_document_notebook(request: HttpRequest, doc_id: int) -> HttpResponse:
         request, f'"{document.original_filename}" moved to notebook "{notebook.name}".'
     )
     return redirect('dashboard:documents')
+
+
+@login_required
+def review_view(request: HttpRequest) -> HttpResponse:
+    """Practice review queue (v1.1 #6): due flashcards, oldest due first.
+
+    The review path is offline by contract -- scheduling is SM-2 in
+    ``study.scheduler``, so the only LLM anywhere near this page is the
+    budgeted generation call, which lives on its own endpoint.
+    """
+    now = timezone.now()
+    cards = Flashcard.objects.for_user(request.user).select_related('notebook')
+    due_cards = list(cards.filter(due_at__lte=now).order_by('due_at', 'pk'))
+    upcoming_count = cards.filter(due_at__gt=now).count()
+    context = {
+        'due_cards': due_cards,
+        'upcoming_count': upcoming_count,
+        'notebooks': Notebook.objects.for_user(request.user).order_by('name'),
+    }
+    return render(request, 'dashboard/review.html', context)
+
+
+@login_required
+@require_POST
+def grade_flashcard(request: HttpRequest, card_id: int) -> HttpResponse:
+    """Grade one of the user's flashcards; SM-2 schedules the next due date.
+
+    ``schedule`` is a pure transition (mutates, never saves), so this
+    view owns persistence and the ReviewLog audit row.
+    """
+    card = get_object_or_404(Flashcard.objects.for_user(request.user), pk=card_id)
+    try:
+        grade = int(request.POST.get('grade', ''))
+    except ValueError:
+        messages.error(request, 'Choose a grade from 0 to 5.')
+        return redirect('dashboard:review')
+    previous_interval_days = card.interval_days
+    try:
+        schedule(card, grade, now=timezone.now())
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect('dashboard:review')
+    card.save(update_fields=['ease', 'repetitions', 'interval_days', 'due_at'])
+    ReviewLog.objects.create(
+        card=card,
+        user=request.user,
+        grade=grade,
+        previous_interval_days=previous_interval_days,
+        next_interval_days=card.interval_days,
+    )
+    messages.success(request, f'Scheduled "{card.question}" for {card.due_at.date()}.')
+    return redirect('dashboard:review')
+

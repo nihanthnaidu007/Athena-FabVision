@@ -21,6 +21,9 @@ urlpatterns = [
         views.assign_document_notebook,
         name='assign-document-notebook',
     ),
+    # Practice review queue (v1.1 #6): due flashcards + SM-2 grading.
+    path('review/', views.review_view, name='review'),
+    path('review/<int:card_id>/grade/', views.grade_flashcard, name='grade-flashcard'),
     # Login/logout for the dashboard's login_required pages; the default
     # Auth flow for the login_required pages: settings.LOGIN_URL
     # defaults to /dashboard/accounts/login/ (this mount). The login
