@@ -19,7 +19,7 @@ from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from assistant.models import Conversation, Message, MessageFeedback
+from assistant.models import Conversation, Message, MessageFeedback, Notebook
 
 pytestmark = pytest.mark.django_db
 
@@ -491,6 +491,61 @@ def test_chat_page_exposes_feedback_url_and_saved_verdict(client, user):
     assert response.status_code == 200
     assert 'data-feedback-url="/agent/feedback/"' in html
     assert 'data-feedback="up"' in html
+
+
+# --- Notebooks (spec #5): composer selector, sidebar badge, scoped context ---
+
+
+def make_notebook(user: User, name: str = "Lithography") -> Notebook:
+    return Notebook.objects.create(user=user, name=name)
+
+
+def test_composer_lists_user_notebooks_only(client, user, other_user):
+    make_notebook(user, name="Lithography")
+    make_notebook(other_user, name="Other user's notes")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert "Lithography" in html
+    assert "Other user's notes" not in html
+
+
+def test_notebook_conversations_are_badged_in_sidebar(client, user):
+    notebook = make_notebook(user, name="Etch")
+    scoped = make_conversation(user, title="Scoped chat")
+    Conversation.objects.filter(pk=scoped.pk).update(notebook=notebook)
+    make_conversation(user, title="Unscoped chat")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert "notebook-badge" in _sidebar_item_after_link(html, "Scoped chat")
+    assert "notebook-badge" not in _sidebar_item_after_link(html, "Unscoped chat")
+
+
+def test_composer_select_reflects_active_conversation_notebook_and_locks(client, user):
+    notebook = make_notebook(user, name="Etch")
+    conversation = make_conversation(user)
+    Conversation.objects.filter(pk=conversation.pk).update(notebook=notebook)
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert f'<option value="{notebook.pk}"' in html
+    assert 'data-locked="true"' in html
+
+
+def test_composer_select_unlocked_for_new_conversation(client, user):
+    make_notebook(user, name="Etch")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    assert "data-locked" not in response.content.decode()
 
 
 def test_chat_page_renders_an_empty_verdict_without_feedback(client, user):

@@ -706,6 +706,32 @@ body {
 
 .feedback-status { color: var(--danger); font-size: 12px; }
 
+.notebook-badge {
+    flex-shrink: 0;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-radius: 999px;
+    background: rgba(18, 183, 106, 0.18);
+    color: #7fe0ae;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+}
+
+.notebook-select {
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12.5px;
+    padding: 4px 8px;
+    max-width: 220px;
+}
+
+.notebook-select:disabled { opacity: 0.55; cursor: default; }
+
 /* ----- narrow screens ----- */
 
 @media (max-width: 760px) {

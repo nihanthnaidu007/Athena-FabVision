@@ -34,6 +34,7 @@ def retrieve(
     query: str,
     k: int = 5,
     *,
+    notebook_id: int | None = None,
     embedder: EmbeddingClient | None = None,
 ) -> list[dict]:
     """Return the top ``k`` source items for ``query`` from ``user``'s documents.
@@ -43,6 +44,11 @@ def retrieve(
     (rounded to 4 decimals). Returns ``[]`` when no embedder is
     configured -- check :func:`available` to distinguish "unavailable"
     from "no matches".
+
+    ``notebook_id`` narrows the same user-scoped query to one notebook's
+    documents; ``None`` searches the whole knowledge base. It can only
+    ever shrink the candidate set -- a notebook can never surface
+    documents the user could not already retrieve.
     """
     client = embedder if embedder is not None else default_embedder()
     if client is None:
@@ -50,10 +56,11 @@ def retrieve(
     query_vector = client.embed([query])[0]
 
     # Strict isolation: the join to document__user is the only access path.
+    scope = {'document__user': user, 'document__status': Document.Status.READY}
+    if notebook_id is not None:
+        scope['document__notebook_id'] = notebook_id
     chunks = (
-        Chunk.objects.filter(
-            document__user=user, document__status=Document.Status.READY
-        )
+        Chunk.objects.filter(**scope)
         .select_related('document')
         .order_by('document_id', 'index')
     )

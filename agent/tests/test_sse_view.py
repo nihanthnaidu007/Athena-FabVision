@@ -18,7 +18,7 @@ from django.core.cache import cache
 from django.test import AsyncClient, Client, override_settings
 
 from agent import loop as loop_module
-from assistant.models import ApiKey, Conversation, Message, UsageEvent
+from assistant.models import ApiKey, Conversation, Message, Notebook, UsageEvent
 
 from .fakes import FakeLLM, delta, usage
 
@@ -277,6 +277,96 @@ def test_stream_body_mode_does_not_override_persisted_conversation(db, user):
 
     conversation.refresh_from_db()
     assert conversation.mode == Conversation.Mode.ASSISTANT
+
+
+# --- Notebook scoping (spec #5) -------------------------------------------------
+
+
+def _new_conversation_payload(**extra):
+    payload = {"message": "hi"}
+    payload.update(extra)
+    return payload
+
+
+def test_notebook_id_scopes_new_conversation(transactional_db, user, monkeypatch):
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    notebook = Notebook.objects.create(user=user, name="Lithography")
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(
+            SSE_URL, data=_new_conversation_payload(notebook_id=notebook.pk)
+        )
+
+    asyncio.run(_scenario())
+
+    conversation = Conversation.objects.get(user=user)
+    assert conversation.notebook == notebook
+
+
+def test_new_conversation_without_notebook_id_is_unscoped(transactional_db, user, monkeypatch):
+    """Regression pin: omitting notebook_id behaves exactly as before."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(SSE_URL, data=_new_conversation_payload())
+
+    asyncio.run(_scenario())
+
+    conversation = Conversation.objects.get(user=user)
+    assert conversation.notebook is None
+
+
+def test_foreign_notebook_id_is_404(db, user):
+    owner = User.objects.create_user(username="notebook-owner", password="x")
+    foreign = Notebook.objects.create(user=owner, name="Not yours")
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data=_new_conversation_payload(notebook_id=foreign.pk),
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+def test_malformed_notebook_id_is_404(db, user):
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data=_new_conversation_payload(notebook_id="not-a-number"),
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 404
+    assert Conversation.objects.count() == 0
+
+
+def test_existing_conversation_keeps_its_own_notebook(transactional_db, user, monkeypatch):
+    """The body's notebook_id is honored only when creating a conversation."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    notebook = Notebook.objects.create(user=user, name="Lithography")
+    other = Notebook.objects.create(user=user, name="Etch")
+    conversation = Conversation.objects.create(user=user, notebook=notebook)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(
+            SSE_URL,
+            data=_new_conversation_payload(conversation_id=conversation.pk, notebook_id=other.pk),
+        )
+
+    asyncio.run(_scenario())
+
+    conversation.refresh_from_db()
+    assert conversation.notebook == notebook
 
 
 @override_settings(REST_FRAMEWORK=throttle_settings(api_key_standard="1/hour"))

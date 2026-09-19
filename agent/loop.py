@@ -15,6 +15,7 @@ keeps its partial answer.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -146,12 +147,26 @@ async def _load_history(conversation: Conversation, limit: int, exclude_pk: int)
     return await sync_to_async(_query)()
 
 
-async def _fetch_context(retrieve: Any, user: Any, query: str) -> list[dict[str, Any]]:
-    """Run the wired retrieval source and normalize its hits (never raises)."""
+async def _fetch_context(
+    retrieve: Any, user: Any, query: str, notebook_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Run the wired retrieval source and normalize its hits (never raises).
+
+    ``notebook_id`` narrows retrieval to one notebook's documents; every
+    wired source must accept the keyword (``None`` = whole knowledge
+    base, the historical behavior).
+    """
     if retrieve is None:
         return []
+    # The wired retrieval source is a plain sync function doing ORM work;
+    # off-load it to a thread so ASGI contexts never trip Django's
+    # sync-only guard (retrieval silently degraded to "no context"
+    # otherwise). Async sources pass through unchanged.
+    call = retrieve if inspect.iscoroutinefunction(retrieve) else sync_to_async(retrieve)
     try:
-        raw = await tool_registry.maybe_await(retrieve(user=user, query=query, k=RETRIEVAL_K))
+        raw = await tool_registry.maybe_await(
+            call(user=user, query=query, k=RETRIEVAL_K, notebook_id=notebook_id)
+        )
     except Exception:
         logger.exception('Retrieval source failed; answering without KB context.')
         return []
@@ -172,8 +187,13 @@ async def run_agent(
     api_key: Any = None,
     history_limit: int = HISTORY_MESSAGE_LIMIT,
     max_tool_rounds: int = TOOL_ROUNDS_LIMIT,
+    notebook_id: int | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Stream one agent turn as typed events; persist it and its usage.
+
+    ``notebook_id`` narrows retrieval to that notebook's documents
+    (``None`` = the conversation's whole knowledge base); the scope is
+    owned by the conversation, so callers pass it through unchanged.
 
     Errors never propagate: every failure inside the turn becomes an
     ``error`` event, and whatever assistant text was already produced is
@@ -267,7 +287,7 @@ async def run_agent(
             return
 
         yield AgentEvent(EVENT_STATUS, _rid({'stage': 'retrieving'}))
-        kb_context = await _fetch_context(retrieve, user, user_input)
+        kb_context = await _fetch_context(retrieve, user, user_input, notebook_id=notebook_id)
 
         history = await _load_history(conversation, history_limit, exclude_pk=user_message.pk)
         messages = build_messages(

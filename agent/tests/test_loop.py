@@ -22,7 +22,7 @@ from agent.loop import (
     run_agent,
 )
 from agent.registry import ToolRegistry
-from assistant.models import Conversation, Message, UsageEvent
+from assistant.models import Chunk, Conversation, Document, Message, UsageEvent
 
 from .fakes import FakeLLM, async_test, delta, echo_tool, failing_tool, tool_call, usage
 
@@ -200,7 +200,7 @@ def test_usage_recorded_with_tokens_latency_and_fks(transactional_db, user, conv
 def test_retrieval_sources_flow_to_event_and_persisted_message(
     transactional_db, user, conversation
 ):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -241,7 +241,7 @@ def test_retrieval_sources_flow_to_event_and_persisted_message(
 
 @async_test
 async def test_async_retrieval_source_supported(db, user, conversation):
-    async def retrieve(user, query, k=5):
+    async def retrieve(user, query, k=5, notebook_id=None):
         return [
             {"document_id": 1, "chunk_id": 2, "title": "Async doc", "snippet": "s", "score": 0.5}
         ]
@@ -253,7 +253,7 @@ async def test_async_retrieval_source_supported(db, user, conversation):
 
 @async_test
 async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -288,7 +288,7 @@ async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
 
 @async_test
 async def test_retrieval_failure_degrades_to_empty_context(db, user, conversation):
-    def broken_retrieve(user, query, k=5):
+    def broken_retrieve(user, query, k=5, notebook_id=None):
         raise RuntimeError("embedding service down")
 
     events = await run_turn(
@@ -300,6 +300,83 @@ async def test_retrieval_failure_degrades_to_empty_context(db, user, conversatio
 
     assert event_types(events)[-3:] == ["sources", "turn_saved", "done"]
     assert next(e for e in events if e.type == "sources").data["sources"] == []
+
+
+@async_test
+async def test_notebook_id_is_forwarded_to_retrieval_source(db, user, conversation):
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn(
+        [[delta("ok."), usage()]], user, conversation, retrieve=retrieve, notebook_id=17
+    )
+
+    assert captured["notebook_id"] == 17
+
+
+@async_test
+async def test_retrieval_without_notebook_receives_none_whole_kb(db, user, conversation):
+    """Regression pin: an unscoped turn retrieves exactly as before v1.1."""
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn([[delta("ok."), usage()]], user, conversation, retrieve=retrieve)
+
+    assert captured["notebook_id"] is None
+
+
+def test_sync_retrieval_source_runs_offloaded_from_the_event_loop(
+    transactional_db, user, conversation, monkeypatch
+):
+    """Regression: the wired sync retrieve must run off the event loop.
+
+    The registry wires the plain sync ``rag.retrieval.retrieve``; called
+    inline inside the loop it raised SynchronousOnlyOperation under ASGI,
+    which the loop swallowed -- every streamed answer degraded to "no
+    document context" in the browser. The real sync source must be
+    off-loaded to a thread and its sources surfaced.
+    """
+    from rag import retrieval as rag_retrieval
+    from rag.tests.fakes import FakeEmbedder
+
+    document = Document.objects.create(
+        user=user,
+        original_filename='runbook.txt',
+        file_type='txt',
+        sha256='0' * 64,
+        status=Document.Status.READY,
+    )
+    embedder = FakeEmbedder()
+    Chunk.objects.create(
+        document=document,
+        index=0,
+        content='wafer yield summary',
+        content_hash='chunk-0',
+        embedding=embedder.embed(['wafer yield summary'])[0],
+    )
+    monkeypatch.setattr(rag_retrieval, 'default_embedder', lambda: embedder)
+
+    async def _scenario():
+        return await run_turn(
+            [[delta("Cited answer."), usage()]],
+            user,
+            conversation,
+            retrieve=rag_retrieval.retrieve,
+            user_input='wafer',
+        )
+
+    events = asyncio.run(_scenario())
+
+    sources_event = next(e for e in events if e.type == "sources")
+    assert [source["title"] for source in sources_event.data["sources"]] == ["runbook.txt"]
+    assistant = conversation.messages.get(role=Message.Role.ASSISTANT)
+    assert len(assistant.sources) == 1
 
 
 def test_history_is_sent_oldest_first_before_new_turn(transactional_db, user, conversation):

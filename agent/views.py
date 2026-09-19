@@ -18,7 +18,7 @@ from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import APIView
 
-from assistant.models import ApiKey, Conversation, Message, MessageFeedback
+from assistant.models import ApiKey, Conversation, Message, MessageFeedback, Notebook
 from django_agent.logging_context import get_request_id
 
 from .llm import default_client
@@ -83,12 +83,18 @@ class AgentStreamView(APIView):
     key tier for API keys; a throttled request answers 429 with
     Retry-After through the JSON error contract.
 
-    Body: ``{"message": "...", "conversation_id": <optional pk>}``
-    (the legacy ``query`` field is accepted too). ``mode`` (optional,
-    ``assistant``|``tutor``) sets a newly created conversation's mode and
-    is honored only at creation -- an existing conversation's persisted
-    mode always rules; the chat-mode endpoint changes it. The response
-    streams ``event: <type>`` / ``data: <json>`` frames for status, delta,
+    Body: ``{"message": "...", "conversation_id": <optional pk>,
+    "notebook_id": <optional pk>}`` (the legacy ``query`` field is
+    accepted too). ``notebook_id`` scopes a NEW conversation to a
+    notebook: retrieval then narrows to that notebook's documents. It is
+    honored only when the stream creates the conversation -- an existing
+    conversation keeps its own notebook. A malformed or foreign
+    notebook id is "not found", the same semantics as conversation ids.
+    ``mode`` (optional, ``assistant``|``tutor``) sets a newly created
+    conversation's mode and is honored only at creation -- an existing
+    conversation's persisted mode always rules; the chat-mode endpoint
+    changes it. The response streams
+    ``event: <type>`` / ``data: <json>`` frames for status, delta,
     tool_call, tool_result, sources, turn_saved (the persisted assistant
     message's pk, the per-message feedback hook), done, and error events;
     failures inside the turn are error events, never a broken stream.
@@ -116,6 +122,7 @@ class AgentStreamView(APIView):
                 user=request.user,
                 title=user_input[:200],
                 mode=mode or Conversation.Mode.ASSISTANT,
+                notebook=_resolve_notebook(request),
             )
 
         request_id = getattr(request, 'request_id', '')
@@ -126,6 +133,7 @@ class AgentStreamView(APIView):
                 user_input=user_input,
                 request_id=request_id,
                 api_key=request.auth if isinstance(request.auth, ApiKey) else None,
+                notebook_id=conversation.notebook_id,
             ),
             content_type='text/event-stream',
         )
@@ -133,6 +141,20 @@ class AgentStreamView(APIView):
         # Disable proxy buffering (nginx et al.) so deltas arrive live.
         response['X-Accel-Buffering'] = 'no'
         return response
+
+
+def _resolve_notebook(request) -> Notebook | None:
+    """Resolve the stream body's ``notebook_id`` for a new conversation.
+
+    Absent or empty means unscoped (whole knowledge base). A malformed,
+    unknown, or foreign id raises ``Http404`` -- identical semantics to
+    conversation ids -- so scoping can never widen another user's data.
+    """
+    raw = request.data.get('notebook_id')
+    if raw in (None, ''):
+        return None
+    notebook_id = _safe_pk(str(raw))
+    return get_object_or_404(Notebook.objects.for_user(request.user), pk=notebook_id)
 
 
 # --- Chat UI -----------------------------------------------------------------
@@ -179,7 +201,11 @@ def _message_items(messages: list[Message], user: Any) -> list[dict[str, Any]]:
 
 def _conversation_items(user: Any, active_pk: int | None) -> list[dict[str, Any]]:
     """Sidebar rows; ``is_active`` marks the conversation being viewed."""
-    conversations = list(Conversation.objects.for_user(user)[:SIDEBAR_CONVERSATION_LIMIT])
+    # select_related('notebook') feeds the sidebar's notebook badge
+    # without one query per row.
+    conversations = list(
+        Conversation.objects.for_user(user).select_related('notebook')[:SIDEBAR_CONVERSATION_LIMIT]
+    )
     return [
         {'conversation': conversation, 'is_active': conversation.pk == active_pk}
         for conversation in conversations
@@ -214,6 +240,9 @@ def chat_home(request: HttpRequest) -> HttpResponse:
             'active_conversation': active_conversation,
             'message_items': _message_items(messages, request.user),
             'llm_configured': default_client() is not None,
+            # Composer notebook scope (v1.1 #5): new conversations can
+            # start scoped; an active conversation renders its own value.
+            'notebooks': list(Notebook.objects.for_user(request.user).order_by('name')),
         },
     )
 
