@@ -94,10 +94,20 @@
                         else if (line.indexOf('data: ') === 0) dataLines.push(line.slice(6));
                     }
                     if (!dataLines.length) continue;
+                    var data;
                     try {
-                        onEvent(type, JSON.parse(dataLines.join('\n')));
+                        data = JSON.parse(dataLines.join('\n'));
                     } catch (err) {
                         onError('Malformed stream frame received.');
+                        continue;
+                    }
+                    // A handler exception is a client rendering bug, not a
+                    // wire problem -- label it honestly so the real cause
+                    // surfaces instead of blaming the stream framing.
+                    try {
+                        onEvent(type, data);
+                    } catch (err) {
+                        onError('Turn event handling failed: ' + (err && err.message ? err.message : err));
                     }
                 }
             }
@@ -924,7 +934,7 @@
         }
 
         function addTurnFooter(turn, latencyMs) {
-            if (turn.querySelector('.turn-footer')) return;
+            if (turn.article.querySelector('.turn-footer')) return;
             var footer = el('div', 'turn-footer muted small');
             footer.textContent = latencyMs ? 'Completed in ' + latencyMs + ' ms' : 'Completed';
             turn.article.appendChild(footer);
