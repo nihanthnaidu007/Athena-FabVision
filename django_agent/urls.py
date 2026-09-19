@@ -10,6 +10,9 @@ urlpatterns = [
     path('', agent_views.chat_home, name='chat-home'),
     path('agent/', include('agent.urls')),
     path('dashboard/', include('dashboard.urls')),
+    # Practice flashcard generation (v1.1 #6): one budgeted LLM call per
+    # POST; the review queue itself lives in the dashboard.
+    path('study/', include('study.urls')),
     # Voice surface (feature-flagged): the page renders both states, the
     # token endpoint answers the JSON error contract when unconfigured.
     path('voice/', include('voice.urls')),
