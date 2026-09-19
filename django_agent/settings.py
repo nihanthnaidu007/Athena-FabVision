@@ -54,6 +54,8 @@ INSTALLED_APPS = [
     'agent',
     'assistant',
     'dashboard',
+    # Practice + spaced review (v1.1 #6): flashcards over course notebooks.
+    'study',
     # Feature-flagged voice surface (LiveKit): harmless (and invisible)
     # without LIVEKIT_URL/API_KEY/SECRET configured.
     'voice',
