@@ -13,6 +13,7 @@ from django.urls import reverse
 
 from agent.export import (
     conversation_to_markdown,
+    rca_report_to_markdown,
     render_sources_markdown,
     render_tool_block_markdown,
 )
@@ -286,3 +287,105 @@ def test_export_requires_login(client, db):
 
     assert response.status_code == 302
     assert "/dashboard/accounts/login/" in response["Location"]
+
+
+# --- 8D report rendering (spec #11) ------------------------------------------
+
+GOLDEN_REPORT = {
+    "title": "Lot 42A edge-ring excursion",
+    "team": ["Process engineering — owner", "QA — verification"],
+    "problem": "Edge-ring yield loss on lot 42A after the 2026-09-14 etch chamber PM.",
+    "timeline": [
+        {"when": "2026-09-14 08:00", "event": "Chamber PM completed; first post-PM lot started."},
+        {"when": "2026-09-14 16:30", "event": "Metrology flagged the edge-ring hotspot."},
+    ],
+    "containment": ["Held lot 42A; no further shipments."],
+    "root_cause": "Chamber PM left a drifted gap setting; edge over-etch.",
+    "root_cause_candidates": ["PM gap drift", "Resist aging"],
+    "corrective_actions": [
+        {
+            "action": "Recalibrate the gap setting and requalify.",
+            "owner": "Etch owner",
+            "due": "2026-09-21",
+        },
+    ],
+    "verification": ["Two qualification lots at target yield."],
+    "prevention": ["Add the gap check to the PM checklist."],
+    "closure": "2026-09-21 with requal data.",
+}
+
+
+def test_rca_report_renders_the_exact_snapshot():
+    """The export snapshot: deterministic bytes for the golden report."""
+    assert rca_report_to_markdown(GOLDEN_REPORT) == (
+        "# Lot 42A edge-ring excursion\n"
+        "\n"
+        "## D1 — Team\n"
+        "\n"
+        "- Process engineering — owner\n"
+        "- QA — verification\n"
+        "\n"
+        "## D2 — Problem description\n"
+        "\n"
+        "Edge-ring yield loss on lot 42A after the 2026-09-14 etch chamber PM.\n"
+        "\n"
+        "### Investigation timeline\n"
+        "\n"
+        "| When | Event |\n"
+        "| --- | --- |\n"
+        "| 2026-09-14 08:00 | Chamber PM completed; first post-PM lot started. |\n"
+        "| 2026-09-14 16:30 | Metrology flagged the edge-ring hotspot. |\n"
+        "\n"
+        "## D3 — Containment actions\n"
+        "\n"
+        "- Held lot 42A; no further shipments.\n"
+        "\n"
+        "## D4 — Root cause\n"
+        "\n"
+        "Chamber PM left a drifted gap setting; edge over-etch.\n"
+        "\n"
+        "### Candidates considered\n"
+        "\n"
+        "- PM gap drift\n"
+        "- Resist aging\n"
+        "\n"
+        "## D5 — Corrective actions\n"
+        "\n"
+        "| Action | Owner | Due |\n"
+        "| --- | --- | --- |\n"
+        "| Recalibrate the gap setting and requalify. | Etch owner | 2026-09-21 |\n"
+        "\n"
+        "## D6 — Verification\n"
+        "\n"
+        "- Two qualification lots at target yield.\n"
+        "\n"
+        "## D7 — Prevention\n"
+        "\n"
+        "- Add the gap check to the PM checklist.\n"
+        "\n"
+        "## D8 — Closure\n"
+        "\n"
+        "2026-09-21 with requal data.\n"
+    )
+
+
+def test_rca_report_untold_sections_render_as_not_stated():
+    """Sections the conversation never stated are honest blanks, not fiction."""
+    report = {
+        "title": "Sparse excursion",
+        "problem": "Yield dipped.",
+        "timeline": [{"when": "day 1", "event": "dip seen"}],
+        "containment": ["Held the lot."],
+        "root_cause": "Under investigation.",
+        "corrective_actions": [{"action": "Keep digging."}],
+    }
+
+    rendered = rca_report_to_markdown(report)
+
+    assert "## D1 — Team\n\nNot stated." in rendered
+    assert "### Investigation timeline" in rendered  # required sections always render
+    assert "### Candidates considered" not in rendered
+    assert "## D6 — Verification\n\nNot stated." in rendered
+    assert "## D7 — Prevention\n\nNot stated." in rendered
+    assert "## D8 — Closure\n\nNot stated." in rendered
+

@@ -739,3 +739,26 @@ def test_rename_requires_post(client, user):
     response = client.get(reverse("chat-rename"))
 
     assert response.status_code == 405
+
+
+def test_rca_report_button_renders_when_llm_configured(client, user):
+    """Spec #11: the composer exposes the 8D report action on live deployments."""
+    conversation = make_conversation(user)
+    client.force_login(user)
+
+    with override_settings(OPENAI_API_KEY="test-key-not-real"):
+        html = client.get(reverse("chat-home"), {"c": conversation.pk}).content.decode()
+
+    assert f'data-rca-url="{reverse("chat-rca-report", args=[conversation.pk])}"' in html
+    assert 'id="rca-report-button"' in html
+
+
+def test_rca_report_button_hidden_without_llm(client, user):
+    """Zero-key deployments hide the report action instead of failing it."""
+    conversation = make_conversation(user)
+    client.force_login(user)
+
+    html = client.get(reverse("chat-home"), {"c": conversation.pk}).content.decode()
+
+    assert "rca-report-button" not in html
+    assert reverse("chat-rca-report", args=[conversation.pk]) not in html

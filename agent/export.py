@@ -231,3 +231,88 @@ def conversation_to_markdown(conversation: Any, messages: list[Any]) -> str:
         sections += ['_No messages yet._']
     sections += [render_message_markdown(message) for message in messages]
     return '\n\n'.join(sections).rstrip() + '\n'
+
+
+# --- 8D report rendering (spec #11) ------------------------------------------
+# The RCA report generator (agent/rca.py) assembles a validated report dict
+# via one budgeted LLM call; this renders it through the same plumbing as
+# the conversation export: deterministic, no timestamps, snapshot-testable.
+
+def _not_stated(items: list[str]) -> str:
+    """An optional list section that degrades to a stated blank."""
+    return _list_items(items) if items else 'Not stated.'
+
+
+def rca_report_to_markdown(report: dict[str, Any]) -> str:
+    """A validated 8D report (the fabtools.rca_report schema) as one document.
+
+    D1-D8 headers in discipline order, the incident timeline as a table
+    after the problem description, root-cause candidates beneath the
+    selected cause. Optional sections that the conversation never stated
+    render as ``Not stated.`` -- an honest blank, never a fabricated one.
+    """
+    timeline = [dict(entry) for entry in report.get('timeline') or []]
+    actions = [dict(entry) for entry in report.get('corrective_actions') or []]
+    candidates = [str(item) for item in report.get('root_cause_candidates') or []]
+
+    sections = [
+        f"# {report.get('title') or '8D report'}",
+        '',
+        '## D1 — Team',
+        '',
+        _not_stated([str(item) for item in report.get('team') or []]),
+        '',
+        '## D2 — Problem description',
+        '',
+        str(report.get('problem') or 'Not stated.'),
+    ]
+    if timeline:
+        sections += [
+            '',
+            '### Investigation timeline',
+            '',
+            _markdown_table(
+                ['When', 'Event'],
+                [[entry.get('when', ''), entry.get('event', '')] for entry in timeline],
+            ),
+        ]
+    sections += [
+        '',
+        '## D3 — Containment actions',
+        '',
+        _not_stated([str(item) for item in report.get('containment') or []]),
+        '',
+        '## D4 — Root cause',
+        '',
+        str(report.get('root_cause') or 'Not stated.'),
+    ]
+    if candidates:
+        sections += ['', '### Candidates considered', '', _list_items(candidates)]
+    sections += ['', '## D5 — Corrective actions', '']
+    if actions:
+        sections += [
+            _markdown_table(
+                ['Action', 'Owner', 'Due'],
+                [
+                    [entry.get('action', ''), entry.get('owner', ''), entry.get('due', '')]
+                    for entry in actions
+                ],
+            )
+        ]
+    else:
+        sections += ['Not stated.']
+    sections += [
+        '',
+        '## D6 — Verification',
+        '',
+        _not_stated([str(item) for item in report.get('verification') or []]),
+        '',
+        '## D7 — Prevention',
+        '',
+        _not_stated([str(item) for item in report.get('prevention') or []]),
+        '',
+        '## D8 — Closure',
+        '',
+        str(report.get('closure') or 'Not stated.'),
+    ]
+    return '\n'.join(sections).rstrip() + '\n'

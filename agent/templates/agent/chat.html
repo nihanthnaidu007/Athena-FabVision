@@ -136,6 +136,13 @@
                    title="Export this conversation as Markdown">
                     ⬇ Export
                 </a>
+                {% if llm_configured %}
+                <button type="button" id="rca-report-button" class="composer-tool-btn"
+                        data-rca-url="{% url 'chat-rca-report' active_conversation.pk %}"
+                        title="Assemble a structured 8D report from this conversation (one AI call)">
+                    📋 8D report
+                </button>
+                {% endif %}
                 {% endif %}
                 <span class="mode-status" id="mode-status" hidden></span>
             </div>

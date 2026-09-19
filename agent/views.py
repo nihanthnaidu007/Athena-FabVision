@@ -1,6 +1,8 @@
 import json
+import time
 from typing import Any
 
+from asgiref.sync import async_to_sync
 from django.contrib.auth.decorators import login_required
 from django.http import (
     Http404,
@@ -19,12 +21,21 @@ from rest_framework.negotiation import DefaultContentNegotiation
 from rest_framework.renderers import JSONRenderer
 from rest_framework.views import APIView
 
-from assistant.models import ApiKey, Conversation, Message, MessageFeedback, Notebook
+from assistant.models import (
+    ApiKey,
+    Conversation,
+    Message,
+    MessageFeedback,
+    Notebook,
+    UsageEvent,
+)
+from assistant.usage import record_usage
 from django_agent.logging_context import get_request_id
 
-from .export import conversation_to_markdown
+from .export import conversation_to_markdown, rca_report_to_markdown
 from .llm import default_client
 from .loop import run_agent
+from .rca import assemble_report
 
 
 def agent_ask_gone(request):
@@ -373,6 +384,60 @@ def export_conversation(request: HttpRequest, pk: int) -> HttpResponse:
     slug = slugify(conversation.title) or 'conversation'
     response = HttpResponse(markdown, content_type='text/markdown; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="{slug}-{conversation.pk}.md"'
+    return response
+
+
+@login_required
+@require_POST
+def generate_rca_report(request: HttpRequest, pk: int) -> HttpResponse:
+    """Assemble and download an 8D report from one conversation (spec #11).
+
+    One budgeted LLM call per click (``agent.rca.assemble_report``),
+    metered as an ``rca_report`` usage event; the draft renders through
+    the same Markdown plumbing as the conversation export above. The
+    chat UI hides the action on zero-key deployments, and the endpoint
+    still answers 503 if POSTed directly. A model reply that fails the
+    schema is an honest 502 naming the problem -- the report is never
+    faked from nothing.
+    """
+    conversation = get_object_or_404(Conversation.objects.for_user(request.user), pk=pk)
+    messages = list(conversation.messages.all())
+    if not messages:
+        return JsonResponse(
+            {
+                'code': 'conversation_empty',
+                'error': 'Nothing to assemble from yet — this conversation has no messages.',
+            },
+            status=400,
+        )
+    llm = default_client()
+    if llm is None:
+        return JsonResponse(
+            {'code': 'llm_unavailable', 'error': 'The model is not configured on this deployment.'},
+            status=503,
+        )
+    transcript = conversation_to_markdown(conversation, messages)
+    started = time.monotonic()
+    assembly = async_to_sync(assemble_report)(
+        title=conversation.title or '', transcript=transcript, llm=llm
+    )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if assembly.report is None:
+        return JsonResponse({'code': assembly.code, 'error': assembly.error}, status=502)
+    record_usage(
+        user=request.user,
+        kind=UsageEvent.Kind.TOOL,
+        conversation=conversation,
+        tool_name='rca_report',
+        tokens_in=assembly.usage.get('tokens_in', 0),
+        tokens_out=assembly.usage.get('tokens_out', 0),
+        latency_ms=latency_ms,
+        model_name=getattr(llm, 'model_name', ''),
+    )
+    markdown = rca_report_to_markdown(assembly.report)
+    slug = slugify(conversation.title) or 'conversation'
+    response = HttpResponse(markdown, content_type='text/markdown; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{slug}-8d-report.md"'
     return response
 
 
