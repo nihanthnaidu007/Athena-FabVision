@@ -1,0 +1,74 @@
+{% extends 'dashboard/base.html' %}
+{% block title %}Review · Athena FabVision{% endblock %}
+{% block content %}
+<h1>Practice review</h1>
+<p class="muted">
+    Flashcards generated from your notebooks, scheduled by SM-2 spaced repetition.
+    The review path is fully offline -- grading never calls a model.
+</p>
+
+{% if messages %}
+    {% for message in messages %}
+    <div class="banner {{ message.tags }}">{{ message }}</div>
+    {% endfor %}
+{% endif %}
+
+<h2>Generate flashcards</h2>
+{% if notebooks %}
+<form method="post" action="{% url 'study:generate' %}" class="generate-form">
+    {% csrf_token %}
+    <label for="notebook_id">Notebook</label>
+    <select name="notebook_id" id="notebook_id" required>
+        {% for notebook in notebooks %}
+        <option value="{{ notebook.id }}">{{ notebook.name }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit">Generate flashcards</button>
+</form>
+<p class="muted">One model call per generation. Cards appear in the queue below, due immediately.</p>
+{% else %}
+<p class="muted">
+    No notebooks yet. Create one on the
+    <a href="{% url 'dashboard:notebooks' %}">notebooks</a> page, assign ready
+    documents to it, then generate flashcards from here.
+</p>
+{% endif %}
+
+<h2>Due now <span class="muted">({{ due_cards|length }})</span></h2>
+{% if due_cards %}
+<ul class="card-list">
+    {% for card in due_cards %}
+    <li class="flashcard">
+        <div class="question">{{ card.question }}</div>
+        <details>
+            <summary>Show answer</summary>
+            <div class="answer">{{ card.answer }}</div>
+        </details>
+        <p class="muted">
+            {{ card.notebook.name|default:'Unscoped' }} &middot;
+            review {{ card.repetitions }} &middot; interval {{ card.interval_days }}d
+            &middot; was due {{ card.due_at|date:'Y-m-d H:i' }}
+        </p>
+        <form method="post" action="{% url 'dashboard:grade-flashcard' card.id %}" class="grade-form">
+            {% csrf_token %}
+            <label>Grade
+                <select name="grade" required>
+                    <option value="0">0 &mdash; blackout</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3 &mdash; correct, hard</option>
+                    <option value="4">4 &mdash; correct</option>
+                    <option value="5">5 &mdash; perfect</option>
+                </select>
+            </label>
+            <button type="submit">Grade</button>
+        </form>
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p class="muted">
+    Nothing due. {% if upcoming_count %}{{ upcoming_count }} card{{ upcoming_count|pluralize }} scheduled for later.{% else %}Generate flashcards from a notebook to get started.{% endif %}
+</p>
+{% endif %}
+{% endblock %}

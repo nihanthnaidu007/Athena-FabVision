@@ -257,6 +257,10 @@ class UsageEvent(models.Model):
         API = 'api'
         VOICE = 'voice'
         TOOL = 'tool'
+        # Practice flashcard generation (v1.1 #6): one budgeted LLM call
+        # per generate action, metered here so the dashboard's spend
+        # breakdowns show it as its own line.
+        STUDY = 'study'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='usage_events'
