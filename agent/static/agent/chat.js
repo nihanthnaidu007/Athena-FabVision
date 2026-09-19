@@ -777,6 +777,7 @@
         var modeStatus = $('#mode-status');
         var notebookSelect = $('#notebook-select');
         var regenerateButton = $('#regenerate-button');
+        var rcaReportButton = $('#rca-report-button');
 
         // Raw answer text per rendered assistant article, for the copy
         // button (fresh turns have no json_script payload to read).
@@ -1232,6 +1233,59 @@
             );
         }
 
+        // ----- 8D report assembly (spec #11) -----
+
+        function downloadBlob(blob, filename) {
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(link.href);
+        }
+
+        function generateRcaReport() {
+            if (state.streaming || !rcaReportButton) return;
+            var url = rcaReportButton.getAttribute('data-rca-url');
+            if (!url) return;
+            rcaReportButton.disabled = true;
+            uploadStatus.hidden = false;
+            uploadStatus.className = 'upload-status';
+            uploadStatus.innerHTML = '';
+            var line = el('div', 'upload-line');
+            var stateText = el('div', 'upload-state muted small',
+                'Assembling the 8D report… (one AI call)');
+            line.appendChild(stateText);
+            uploadStatus.appendChild(line);
+
+            fetch(url, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': csrf }
+            }).then(function (response) {
+                if (!response.ok) {
+                    // Errors carry {"code", "error"}: surface the server's
+                    // own words instead of a generic failure.
+                    return response.json().catch(function () { return {}; })
+                        .then(function (payload) {
+                            throw new Error((payload && payload.error) || 'HTTP ' + response.status);
+                        });
+                }
+                var disposition = response.headers.get('Content-Disposition') || '';
+                var named = disposition.match(/filename="([^"]+)"/);
+                return response.blob().then(function (blob) {
+                    downloadBlob(blob, named ? named[1] : '8d-report.md');
+                    uploadStatus.classList.add('upload-ok');
+                    stateText.textContent = '✓ 8D report downloaded.';
+                });
+            }).catch(function (error) {
+                uploadStatus.classList.add('upload-error');
+                stateText.textContent = '✗ Could not assemble the 8D report: ' + error.message;
+            }).finally(function () {
+                rcaReportButton.disabled = false;
+            });
+        }
+
         // ----- wafer CSV handoff (storage-only documents -> analyzer) -----
 
         function addAnalyzeAffordance(container, filePath) {
@@ -1502,6 +1556,10 @@
 
         if (regenerateButton) {
             regenerateButton.addEventListener('click', regenerateLastAnswer);
+        }
+
+        if (rcaReportButton) {
+            rcaReportButton.addEventListener('click', generateRcaReport);
         }
 
         conversationList.addEventListener('click', function (event) {
