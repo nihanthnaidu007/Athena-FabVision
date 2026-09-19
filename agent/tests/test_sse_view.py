@@ -18,7 +18,7 @@ from django.core.cache import cache
 from django.test import AsyncClient, Client, override_settings
 
 from agent import loop as loop_module
-from assistant.models import ApiKey, Conversation, Message, Notebook, UsageEvent
+from assistant.models import ApiKey, Conversation, Message, MessageFeedback, Notebook, UsageEvent
 
 from .fakes import FakeLLM, delta, usage
 
@@ -393,3 +393,132 @@ def test_throttled_api_key_requests_get_429(db, user):
     assert first.status_code == 200
     assert second.status_code == 429
     assert "Retry-After" in second.headers
+
+
+# --- Regenerate endpoint (spec #9) ------------------------------------------
+
+
+def regen_url(pk: int) -> str:
+    return f"/agent/chat/{pk}/regenerate/"
+
+
+def _regen_transaction(monkeypatch):
+    monkeypatch.setattr(loop_module, "default_client", fake_llm_script)
+
+
+def test_regenerate_replaces_answer_without_duplicating_user_row(
+    transactional_db, user, monkeypatch
+):
+    """The endpoint reuses the persisted user row: exactly one user row
+    stays, the stale answer is deleted, and the fresh answer is streamed
+    and persisted with the full lifecycle contract."""
+    _regen_transaction(monkeypatch)
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Why is yield low?"
+    )
+    stale = Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content="Stale answer."
+    )
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        response = await client.post(regen_url(conversation.pk))
+        body = b"".join([chunk async for chunk in response.streaming_content])
+        return response, parse_sse(body)
+
+    response, frames = asyncio.run(_scenario())
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "text/event-stream"
+    types = [t for t, _ in frames]
+    assert types[0] == "status"
+    assert types[-1] == "done"
+    assert "turn_saved" in types
+    # The user row was reused, never duplicated; the stale answer was replaced.
+    rows = list(conversation.messages.order_by("pk"))
+    assert [(m.role, m.content) for m in rows] == [
+        (Message.Role.USER, "Why is yield low?"),
+        (Message.Role.ASSISTANT, "Hello fab."),
+    ]
+    assert not Message.objects.filter(pk=stale.pk).exists()
+    # turn_saved points at the fresh answer (the new feedback hook).
+    saved = next(data for t, data in frames if t == "turn_saved")
+    assert saved["message_id"] == rows[1].pk
+
+
+def test_regenerate_deletes_the_stale_answer_s_feedback(transactional_db, user, monkeypatch):
+    """The old answer's verdict dies with the old answer: feedback on a
+    regenerated turn must not attach to the fresh answer it did not rate."""
+    _regen_transaction(monkeypatch)
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(conversation=conversation, role=Message.Role.USER, content="q")
+    stale = Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content="old"
+    )
+    MessageFeedback.objects.create(message=stale, user=user, value=MessageFeedback.Value.UP)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    assert (asyncio.run(_scenario())).status_code == 200
+    assert MessageFeedback.objects.count() == 0
+
+
+def test_regenerate_empty_conversation_is_400(transactional_db, user):
+    conversation = Conversation.objects.create(user=user)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+
+
+def test_regenerate_when_last_row_is_user_is_400(transactional_db, user):
+    """A trailing user row means the last answer never landed (failed or
+    stopped turn): there is nothing to replace, so the endpoint says so."""
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="unanswered"
+    )
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 400
+    assert "regenerate" in response.json()["error"]
+
+
+def test_regenerate_is_user_scoped(transactional_db, user, monkeypatch):
+    other = User.objects.create_user(username="sse-other", password="x")
+    foreign = Conversation.objects.create(user=other)
+    Message.objects.create(conversation=foreign, role=Message.Role.USER, content="private")
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(foreign.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 404
+    assert foreign.messages.filter(role=Message.Role.USER).count() == 1
+
+
+def test_regenerate_requires_auth(db):
+    response = Client().post(regen_url(1))
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "authentication_required"

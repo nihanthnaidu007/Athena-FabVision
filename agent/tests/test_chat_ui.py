@@ -65,6 +65,11 @@ def test_chat_home_renders_client_contract(client, user):
     assert 'data-example-wafer-url="/kb/documents/example-wafer/"' in html
     assert 'data-new-chat-url="/agent/chat/new/"' in html
     assert 'data-mode-url="/agent/chat/mode/"' in html
+    # Conversation-management hooks (spec #9): rename endpoint, delete and
+    # regenerate URL templates (pk 0 is the placeholder the client swaps).
+    assert 'data-rename-url="/agent/chat/rename/"' in html
+    assert 'data-delete-url-template="/agent/chat/0/delete/"' in html
+    assert 'data-regenerate-url-template="/agent/chat/0/regenerate/"' in html
     assert 'id="composer-form"' in html
     assert 'id="stop-button"' in html
     assert 'id="kb-file-input"' in html
@@ -575,3 +580,162 @@ def test_chat_page_shows_only_the_viewing_user_s_verdict(client, user, other_use
     assert response.status_code == 200
     assert 'data-feedback=""' in html
     assert 'data-feedback="down"' not in html
+
+
+# --- Conversation management batch (spec #9) --------------------------------
+
+
+def test_sidebar_rows_render_rename_and_delete_controls(client, user):
+    """Every server-rendered row ships the full management set: link,
+    rename pencil, and a working delete form (the client mirrors these
+    for rows it creates mid-session)."""
+    conversation = make_conversation(user, title="Manage me")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert 'data-rename-btn' in html
+    assert 'aria-label="Rename conversation"' in html
+    item = _sidebar_item_after_link(html, "Manage me")
+    assert f'action="/agent/chat/{conversation.pk}/delete/"' in item
+    assert 'aria-label="Delete conversation"' in item
+    assert 'csrfmiddlewaretoken' in item
+    assert 'data-confirm="Delete this conversation and its messages?"' in item
+
+
+def test_sidebar_cap_indicator_appears_only_past_limit(client, user):
+    """Under the cap there is no indicator: the sidebar is the whole set."""
+    for i in range(3):
+        make_conversation(user, title=f"conv {i}")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    assert "data-sidebar-cap" not in response.content.decode()
+
+
+def test_sidebar_cap_indicator_counts_hidden_conversations(client, user):
+    """At 52 conversations the indicator names the limit and the total,
+    and the visible list stays capped at 50 rows."""
+    for i in range(52):
+        Conversation.objects.create(user=user, title=f"conv {i:02d}")
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert 'data-sidebar-cap' in html
+    assert 'data-sidebar-limit="50"' in html
+    assert 'data-sidebar-total="52"' in html
+    # The template wraps the numbers across lines; the DOM collapses that
+    # whitespace, so assert against the same collapsed text a reader sees.
+    flat = re.sub(r"\s+", " ", html)
+    assert "Showing the 50 most recent of 52 conversations" in flat
+    assert html.count("data-conversation-item=") == 50
+
+
+def test_active_conversation_shows_export_and_regenerate(client, user):
+    conversation = make_conversation(user, title="exportable")
+    add_message(conversation, role=Message.Role.USER, content="hello")
+    client.force_login(user)
+
+    response = client.get(f"{reverse('chat-home')}?c={conversation.pk}")
+
+    html = response.content.decode()
+    assert f"href=\"{reverse('chat-export', args=[conversation.pk])}\"" in html
+    assert 'id="export-button"' in html
+    assert 'id="regenerate-button"' in html
+
+
+def test_export_and_regenerate_hidden_without_active_conversation(client, user):
+    """No conversation selected: nothing to export or regenerate, but the
+    URL templates still ship so a fresh conversation can use them."""
+    client.force_login(user)
+
+    response = client.get(reverse("chat-home"))
+
+    html = response.content.decode()
+    assert 'id="export-button"' not in html
+    assert 'id="regenerate-button"' not in html
+    assert 'data-regenerate-url-template="/agent/chat/0/regenerate/"' in html
+
+
+# --- inline rename endpoint ---------------------------------------------------
+
+
+def test_rename_conversation_persists_and_answers_json(client, user):
+    conversation = make_conversation(user, title="before")
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-rename"),
+        data={"conversation_id": conversation.pk, "title": "  Renamed title  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"conversation_id": conversation.pk, "title": "Renamed title"}
+    conversation.refresh_from_db()
+    assert conversation.title == "Renamed title"
+
+
+def test_rename_blank_title_is_400(client, user):
+    conversation = make_conversation(user, title="keep me")
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-rename"),
+        data={"conversation_id": conversation.pk, "title": "   "},
+    )
+
+    assert response.status_code == 400
+    conversation.refresh_from_db()
+    assert conversation.title == "keep me"
+
+
+def test_rename_missing_title_is_400(client, user):
+    conversation = make_conversation(user, title="keep me")
+    client.force_login(user)
+
+    response = client.post(reverse("chat-rename"), data={"conversation_id": conversation.pk})
+
+    assert response.status_code == 400
+
+
+def test_rename_foreign_conversation_is_404(client, user, other_user):
+    foreign = make_conversation(other_user, title="not yours")
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-rename"),
+        data={"conversation_id": foreign.pk, "title": "mine now"},
+    )
+
+    assert response.status_code == 404
+    foreign.refresh_from_db()
+    assert foreign.title == "not yours"
+
+
+def test_rename_malformed_conversation_id_is_404(client, user):
+    client.force_login(user)
+
+    response = client.post(
+        reverse("chat-rename"), data={"conversation_id": "abc", "title": "x"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_rename_requires_login(client, db):
+    response = client.post(reverse("chat-rename"), data={"conversation_id": 1, "title": "x"})
+
+    assert response.status_code == 302
+    assert "/dashboard/accounts/login/" in response["Location"]
+
+
+def test_rename_requires_post(client, user):
+    client.force_login(user)
+
+    response = client.get(reverse("chat-rename"))
+
+    assert response.status_code == 405

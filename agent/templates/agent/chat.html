@@ -21,6 +21,10 @@
      data-chat-home-url="{% url 'chat-home' %}"
      data-mode-url="{% url 'chat-mode' %}"
      data-feedback-url="{% url 'message-feedback' %}"
+     data-rename-url="{% url 'chat-rename' %}"
+     {# pk 0 is a placeholder the client rewrites with the real id #}
+     data-delete-url-template="{% url 'chat-delete' 0 %}"
+     data-regenerate-url-template="{% url 'chat-regenerate' 0 %}"
      data-llm-configured="{% if llm_configured %}true{% else %}false{% endif %}">
     <aside class="sidebar">
         <div class="brand">
@@ -46,6 +50,8 @@
                 {% if item.conversation.notebook %}
                 <span class="notebook-badge" title="Notebook-scoped: {{ item.conversation.notebook.name }}">{{ item.conversation.notebook.name }}</span>
                 {% endif %}
+                <button type="button" class="icon-btn rename-btn" data-rename-btn
+                        aria-label="Rename conversation" title="Rename conversation">&#9998;</button>
                 <form method="post" action="{% url 'chat-delete' item.conversation.pk %}" class="inline"
                       data-confirm="Delete this conversation and its messages?">
                     {% csrf_token %}
@@ -56,6 +62,14 @@
             {% empty %}
             <div class="sidebar-empty">No conversations yet.</div>
             {% endfor %}
+            {% if sidebar_hidden_count %}
+            <div class="sidebar-cap muted small" data-sidebar-cap
+                 data-sidebar-limit="{{ sidebar_limit }}"
+                 data-sidebar-total="{{ sidebar_limit|add:sidebar_hidden_count }}">
+                Showing the {{ sidebar_limit }} most recent of
+                {{ sidebar_limit|add:sidebar_hidden_count }} conversations — older ones are hidden.
+            </div>
+            {% endif %}
         </div>
         <div class="side-footer">
             <span class="muted">{{ user.username }}</span>
@@ -112,6 +126,17 @@
                         title="Tutor mode: Athena guides with hints and questions instead of final answers">
                     Tutor mode
                 </button>
+                {% if active_conversation %}
+                <button type="button" id="regenerate-button" class="composer-tool-btn"
+                        title="Regenerate the last answer">
+                    ↻ Regenerate
+                </button>
+                <a id="export-button" class="composer-tool-btn export-link"
+                   href="{% url 'chat-export' active_conversation.pk %}"
+                   title="Export this conversation as Markdown">
+                    ⬇ Export
+                </a>
+                {% endif %}
                 <span class="mode-status" id="mode-status" hidden></span>
             </div>
             <form id="composer-form" autocomplete="off">

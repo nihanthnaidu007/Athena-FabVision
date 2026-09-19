@@ -732,6 +732,46 @@ body {
 
 .notebook-select:disabled { opacity: 0.55; cursor: default; }
 
+/* ----- conversation management (rename, export, regenerate, cap) ----- */
+
+.icon-btn.rename-btn { font-size: 13px; }
+.icon-btn.rename-btn:hover { color: var(--accent); }
+
+.rename-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13.5px;
+    font-family: inherit;
+}
+
+.rename-input.rename-error { border-color: var(--danger); }
+
+.sidebar-cap {
+    padding: 8px 10px;
+    line-height: 1.4;
+}
+
+.composer-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    padding: 4px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.composer-tool-btn:hover { background: #f2f5f8; }
+.composer-tool-btn:disabled { opacity: 0.55; cursor: default; }
+
+.export-link { color: var(--muted); }
+
 /* ----- narrow screens ----- */
 
 @media (max-width: 760px) {
