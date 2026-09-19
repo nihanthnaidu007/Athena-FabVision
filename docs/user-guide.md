@@ -87,7 +87,8 @@ answer") instead of implying grounding that isn't there.
 2. Watch the status line while the turn streams; tool cards appear
    inline as tools run.
 3. Start a fresh thread with **+ New chat**. Conversations are listed
-   in the sidebar; delete one with its **×** button.
+   in the sidebar; each row has a **✎ rename** button and a **×**
+   delete button, and long histories are capped (see §10).
 
 ---
 
@@ -350,18 +351,62 @@ in your knowledge base can leak in.
 
 ---
 
-## 10. Coming soon
+## 10. Conversation management: rename, export, copy, regenerate
+
+### What it does
+
+The sidebar and transcript give you full control over your
+conversations:
+
+- **Rename** any conversation inline (✎ button in the sidebar) so the
+  list stays navigable.
+- **Copy** any assistant answer to your clipboard with the 📋 button
+  on the message.
+- **Regenerate** the last answer: the user's question stays, the stale
+  answer (and its feedback rating) is replaced by a fresh streamed
+  response.
+- **Export** the whole conversation as Markdown — including the
+  sources each answer cited and the tool results that ran — as a
+  download.
+- Long histories are handled honestly: the sidebar shows your 50 most
+  recent conversations and, if there are more, says so ("Showing the
+  50 most recent of N conversations — older ones are hidden") instead
+  of silently hiding them.
+
+### How to use it
+
+- **Rename:** click ✎ on a conversation row, edit the title, confirm.
+  The new title is saved immediately (verified: the rename API
+  persists it and exports use the new name).
+- **Copy:** click 📋 on an assistant message. On restricted contexts
+  (non-HTTPS deployments) the copy falls back to a hidden-textarea
+  mechanism automatically.
+- **Regenerate:** use the regenerate control on the last exchange —
+  the fresh answer streams in place; your question is not duplicated.
+- **Export:** open the conversation and use the export action; you get
+  a Markdown file titled with the conversation name, with every turn
+  plus `Sources` and `Tool result` sections.
+
+### Failure modes you may see
+
+- **"A non-empty title is required."** Renaming to a blank title is
+  rejected — a rename is a deliberate edit.
+- **Nothing to regenerate.** Regenerating a conversation whose last
+  turn has no completed answer returns an error rather than a silent
+  no-op. Send the message first, or ask again.
+- **Regenerate replaced a rating.** A regenerated turn discards the
+  old answer *and its feedback rating* — rate the fresh answer on its
+  own merits.
+- **Someone else's conversation is not yours to touch.** Rename,
+  export, copy, and regenerate all operate only on your own
+  conversations; another user's conversation id is unreachable (404).
+
+---
+
+## 11. Coming soon
 
 These v1.1 features are not merged yet; this guide will grow real
 sections when they land.
-
-### TODO: Conversation management (rename, Markdown export, copy, regenerate)
-
-Conversation export to Markdown and per-message regenerate/copy are
-in flight (PR #24). Until it merges, the chat sidebar offers **+ New
-chat** and per-conversation **delete** only. **TODO: document rename
-in place, "Export conversation as Markdown", copy, and
-duplicate-free regenerate once shipped.**
 
 ### TODO: Practice & spaced review (SM-2)
 

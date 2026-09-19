@@ -117,8 +117,9 @@ same tool and the result renders as a wafer-map block.
 
 The task-oriented, end-user guide to the v1.1 feature wave — accounts and the
 seeded knowledge base, document management, wafer analysis and the die-grid
-visualization, the SPC rules checker, tutor mode, answer feedback, and course
-notebooks — lives in [`docs/user-guide.md`](docs/user-guide.md). Every
+visualization, the SPC rules checker, tutor mode, answer feedback, course
+notebooks, and conversation management (rename, Markdown export, copy,
+regenerate) — lives in [`docs/user-guide.md`](docs/user-guide.md). Every
 documented behavior was verified against a running instance, including the
 failure modes (malformed CSVs, failed ingestion, tutor hints-not-answers).
 
