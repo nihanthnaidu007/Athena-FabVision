@@ -113,6 +113,16 @@ python manage.py shell -c "import asyncio; from fabtools.tools import wafer_map_
 In chat, attach a wafer CSV to a message and just ask — the model invokes the
 same tool and the result renders as a wafer-map block.
 
+## User guide
+
+The task-oriented, end-user guide to the v1.1 feature wave — accounts and the
+seeded knowledge base, document management, wafer analysis and the die-grid
+visualization, the SPC rules checker, tutor mode, answer feedback, course
+notebooks, and conversation management (rename, Markdown export, copy,
+regenerate) — lives in [`docs/user-guide.md`](docs/user-guide.md). Every
+documented behavior was verified against a running instance, including the
+failure modes (malformed CSVs, failed ingestion, tutor hints-not-answers).
+
 ## Architecture
 
 One Django service, five layers, one shared agent core. The voice worker is a
@@ -194,7 +204,6 @@ self-hosted single-container deployment.
 | --- | --- | --- | --- |
 | `/` | GET | session | Chat UI (login required) |
 | `/agent/stream/` | POST | session or API key | One agent turn as an SSE stream |
-| `/agent/ask/` | POST | session or API key | Legacy one-shot REST shim |
 | `/kb/documents/` | POST | session or API key | Knowledge-base upload (multipart `file`) |
 | `/voice/` | GET | session | Voice page (both configured/unconfigured states) |
 | `/voice/token/` | POST | session or API key | Mint a LiveKit room token (throttled) |

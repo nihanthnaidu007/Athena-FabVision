@@ -7,14 +7,15 @@ blocks back into the model round by round.
 
 ``run_agent`` is an async generator yielding typed agent events:
 ``status``, ``delta``, ``tool_call``, ``tool_result``, ``sources``,
-``done``, ``error``. Any failure becomes an ``error`` event; the
-stream degrades, it never dies. Assistant text produced before a
-failure is still persisted, so an aborted or failing turn keeps its
-partial answer.
+``turn_saved``, ``done``, ``error``. Any failure becomes an ``error``
+event; the stream degrades, it never dies. Assistant text produced
+before a failure is still persisted, so an aborted or failing turn
+keeps its partial answer.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -39,6 +40,28 @@ SYSTEM_PROMPT = (
     'uncertainty.'
 )
 
+TUTOR_SYSTEM_PROMPT = (
+    'You are Athena, a Socratic tutor for semiconductor fab and process engineering. '
+    "Never give the final answer or a complete solution: reply with hints, guiding "
+    'questions, and one next step at a time, and check the student\'s understanding as '
+    'you go. Ground hints in retrieved knowledge-base context and cite it; you may run '
+    'tools, but guide the student through interpreting each result instead of stating '
+    'the conclusion.'
+)
+
+
+def resolve_system_prompt(mode: str) -> str:
+    """Pick the system preset for a conversation mode.
+
+    Tutor conversations swap the default note for the tutor preset;
+    anything unknown answers as the default assistant -- a corrupt
+    value can never silently turn tutoring on.
+    """
+    if mode == Conversation.Mode.TUTOR:
+        return TUTOR_SYSTEM_PROMPT
+    return SYSTEM_PROMPT
+
+
 HISTORY_MESSAGE_LIMIT = 30
 TOOL_ROUNDS_LIMIT = 5
 RETRIEVAL_K = 5
@@ -48,6 +71,7 @@ EVENT_DELTA = 'delta'
 EVENT_TOOL_CALL = 'tool_call'
 EVENT_TOOL_RESULT = 'tool_result'
 EVENT_SOURCES = 'sources'
+EVENT_TURN_SAVED = 'turn_saved'
 EVENT_DONE = 'done'
 EVENT_ERROR = 'error'
 
@@ -123,12 +147,26 @@ async def _load_history(conversation: Conversation, limit: int, exclude_pk: int)
     return await sync_to_async(_query)()
 
 
-async def _fetch_context(retrieve: Any, user: Any, query: str) -> list[dict[str, Any]]:
-    """Run the wired retrieval source and normalize its hits (never raises)."""
+async def _fetch_context(
+    retrieve: Any, user: Any, query: str, notebook_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Run the wired retrieval source and normalize its hits (never raises).
+
+    ``notebook_id`` narrows retrieval to one notebook's documents; every
+    wired source must accept the keyword (``None`` = whole knowledge
+    base, the historical behavior).
+    """
     if retrieve is None:
         return []
+    # The wired retrieval source is a plain sync function doing ORM work;
+    # off-load it to a thread so ASGI contexts never trip Django's
+    # sync-only guard (retrieval silently degraded to "no context"
+    # otherwise). Async sources pass through unchanged.
+    call = retrieve if inspect.iscoroutinefunction(retrieve) else sync_to_async(retrieve)
     try:
-        raw = await tool_registry.maybe_await(retrieve(user=user, query=query, k=RETRIEVAL_K))
+        raw = await tool_registry.maybe_await(
+            call(user=user, query=query, k=RETRIEVAL_K, notebook_id=notebook_id)
+        )
     except Exception:
         logger.exception('Retrieval source failed; answering without KB context.')
         return []
@@ -149,12 +187,25 @@ async def run_agent(
     api_key: Any = None,
     history_limit: int = HISTORY_MESSAGE_LIMIT,
     max_tool_rounds: int = TOOL_ROUNDS_LIMIT,
+    notebook_id: int | None = None,
+    existing_user_message: Message | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Stream one agent turn as typed events; persist it and its usage.
+
+    ``notebook_id`` narrows retrieval to that notebook's documents
+    (``None`` = the conversation's whole knowledge base); the scope is
+    owned by the conversation, so callers pass it through unchanged.
 
     Errors never propagate: every failure inside the turn becomes an
     ``error`` event, and whatever assistant text was already produced is
     persisted so an aborted turn keeps its partial answer.
+
+    ``existing_user_message`` is the regenerate path (spec #9): the
+    caller already has the persisted user row for this turn, so it is
+    reused instead of duplicated and its content becomes the turn
+    input. The view deletes the stale answer before streaming; this
+    parameter is what keeps regenerating from ever adding a second
+    user message.
     """
     reg = registry if registry is not None else tool_registry.REGISTRY
     retrieve = retrieve if retrieve is not None else reg.retrieval
@@ -165,6 +216,7 @@ async def run_agent(
     kb_context: list[dict[str, Any]] = []
     usage = {'tokens_in': 0, 'tokens_out': 0}
     turn_persisted = False
+    persisted_message_id: int | None = None
 
     def _rid(data: dict) -> dict:
         return {**data, 'request_id': request_id}
@@ -178,7 +230,7 @@ async def run_agent(
         Only turns that produced content are persisted: a stream that
         failed before any output leaves just the user message behind.
         """
-        nonlocal turn_persisted
+        nonlocal turn_persisted, persisted_message_id
         if turn_persisted or not (text_parts or tool_blocks):
             return
         turn_persisted = True
@@ -195,6 +247,7 @@ async def run_agent(
         except Exception:
             logger.exception('Failed to persist assistant message (rid=%s).', request_id)
             return
+        persisted_message_id = assistant_message.pk
         try:
             await sync_to_async(record_usage)(
                 user=user,
@@ -217,9 +270,13 @@ async def run_agent(
             getattr(user, 'pk', None),
             conversation.pk,
         )
-        user_message = await _create_message(
-            conversation, role=Message.Role.USER, content=user_input
-        )
+        if existing_user_message is not None:
+            # Regenerate: reuse the persisted user row and its content.
+            user_message = existing_user_message
+        else:
+            user_message = await _create_message(
+                conversation, role=Message.Role.USER, content=user_input
+            )
         yield AgentEvent(
             EVENT_STATUS,
             _rid({
@@ -242,11 +299,14 @@ async def run_agent(
             return
 
         yield AgentEvent(EVENT_STATUS, _rid({'stage': 'retrieving'}))
-        kb_context = await _fetch_context(retrieve, user, user_input)
+        kb_context = await _fetch_context(retrieve, user, user_input, notebook_id=notebook_id)
 
         history = await _load_history(conversation, history_limit, exclude_pk=user_message.pk)
         messages = build_messages(
-            system_prompt=SYSTEM_PROMPT, history=history, user_input=user_input, context=kb_context
+            system_prompt=resolve_system_prompt(conversation.mode),
+            history=history,
+            user_input=user_input,
+            context=kb_context,
         )
         tools = reg.tool_schemas()
 
@@ -295,7 +355,14 @@ async def run_agent(
                     request_id,
                     block.get('type'),
                 )
-                yield AgentEvent(EVENT_TOOL_RESULT, _rid({'name': call.name, 'block': block}))
+                # ``call_id`` pairs the result with its tool_call event so
+                # the client replaces the right card even when one turn
+                # calls the same tool twice. Additive: consumers that
+                # never read it keep matching by tool name.
+                yield AgentEvent(
+                    EVENT_TOOL_RESULT,
+                    _rid({'name': call.name, 'block': block, 'call_id': call.id}),
+                )
                 messages.append(
                     {
                         'role': 'tool',
@@ -306,6 +373,15 @@ async def run_agent(
 
         sources = _final_sources()
         yield AgentEvent(EVENT_SOURCES, _rid({'sources': sources}))
+        # Persist before ``done`` so the client can learn the assistant
+        # message's pk while the turn is still live -- the hook the
+        # per-message feedback UI hangs from. Additive event: consumers
+        # that ignore unknown event types keep working unchanged. The
+        # ``finally`` below stays as the failure-path safety net; this
+        # call is idempotent.
+        await _persist_turn()
+        if persisted_message_id is not None:
+            yield AgentEvent(EVENT_TURN_SAVED, _rid({'message_id': persisted_message_id}))
         latency_ms = int((time.monotonic() - t0) * 1000)
         yield AgentEvent(
             EVENT_DONE,

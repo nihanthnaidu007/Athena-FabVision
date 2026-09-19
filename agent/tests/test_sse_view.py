@@ -18,7 +18,7 @@ from django.core.cache import cache
 from django.test import AsyncClient, Client, override_settings
 
 from agent import loop as loop_module
-from assistant.models import ApiKey, Conversation, Message, UsageEvent
+from assistant.models import ApiKey, Conversation, Message, MessageFeedback, Notebook, UsageEvent
 
 from .fakes import FakeLLM, delta, usage
 
@@ -155,7 +155,7 @@ def test_full_turn_over_sse_records_usage_and_persists(transactional_db, user, m
 
     types = [event_type for event_type, _ in frames]
     assert types[0] == "status"
-    assert types[-4:] == ["delta", "delta", "sources", "done"]
+    assert types[-5:] == ["delta", "delta", "sources", "turn_saved", "done"]
     done_data = frames[-1][1]
     assert done_data["tokens_in"] == 4
     assert done_data["tokens_out"] == 2
@@ -225,6 +225,150 @@ def test_throttled_session_requests_get_429_and_retry_after(transactional_db, us
     assert second.json()["code"] == "rate_limited"
 
 
+def test_stream_creates_conversation_in_requested_mode(transactional_db, user, monkeypatch):
+    """``mode`` in the body sets a newly created conversation's mode."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+    client = AsyncClient()
+
+    async def _scenario():
+        response = await client.post(
+            SSE_URL,
+            data={"message": "Why is yield low?", "mode": "tutor"},
+            headers={"X-API-Key": raw},
+        )
+        body = b"".join([chunk async for chunk in response.streaming_content])
+        return response, parse_sse(body)
+
+    response, frames = asyncio.run(_scenario())
+
+    assert response.status_code == 200
+    assert frames[0][0] == "status"
+    conversation = Conversation.objects.get()
+    assert conversation.mode == Conversation.Mode.TUTOR
+    assert conversation.messages.filter(role=Message.Role.USER).exists()
+
+
+def test_stream_rejects_unknown_mode_with_400(db, user):
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data={"message": "hi", "mode": "banana"},
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+    assert "mode" in response.json()["error"]
+    assert Conversation.objects.count() == 0
+
+
+def test_stream_body_mode_does_not_override_persisted_conversation(db, user):
+    """``mode`` is creation-only; an existing conversation's mode rules."""
+    conversation = Conversation.objects.create(user=user)  # assistant mode
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    Client().post(
+        SSE_URL,
+        data={"message": "hi", "conversation_id": conversation.pk, "mode": "tutor"},
+        HTTP_X_API_KEY=raw,
+    )
+
+    conversation.refresh_from_db()
+    assert conversation.mode == Conversation.Mode.ASSISTANT
+
+
+# --- Notebook scoping (spec #5) -------------------------------------------------
+
+
+def _new_conversation_payload(**extra):
+    payload = {"message": "hi"}
+    payload.update(extra)
+    return payload
+
+
+def test_notebook_id_scopes_new_conversation(transactional_db, user, monkeypatch):
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    notebook = Notebook.objects.create(user=user, name="Lithography")
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(
+            SSE_URL, data=_new_conversation_payload(notebook_id=notebook.pk)
+        )
+
+    asyncio.run(_scenario())
+
+    conversation = Conversation.objects.get(user=user)
+    assert conversation.notebook == notebook
+
+
+def test_new_conversation_without_notebook_id_is_unscoped(transactional_db, user, monkeypatch):
+    """Regression pin: omitting notebook_id behaves exactly as before."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(SSE_URL, data=_new_conversation_payload())
+
+    asyncio.run(_scenario())
+
+    conversation = Conversation.objects.get(user=user)
+    assert conversation.notebook is None
+
+
+def test_foreign_notebook_id_is_404(db, user):
+    owner = User.objects.create_user(username="notebook-owner", password="x")
+    foreign = Notebook.objects.create(user=owner, name="Not yours")
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data=_new_conversation_payload(notebook_id=foreign.pk),
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+def test_malformed_notebook_id_is_404(db, user):
+    _api_key, raw = ApiKey.generate(name="k", created_by=user)
+
+    response = Client().post(
+        SSE_URL,
+        data=_new_conversation_payload(notebook_id="not-a-number"),
+        HTTP_X_API_KEY=raw,
+    )
+
+    assert response.status_code == 404
+    assert Conversation.objects.count() == 0
+
+
+def test_existing_conversation_keeps_its_own_notebook(transactional_db, user, monkeypatch):
+    """The body's notebook_id is honored only when creating a conversation."""
+    monkeypatch.setattr(loop_module, "default_client", lambda: fake_llm_script())
+    notebook = Notebook.objects.create(user=user, name="Lithography")
+    other = Notebook.objects.create(user=user, name="Etch")
+    conversation = Conversation.objects.create(user=user, notebook=notebook)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(
+            SSE_URL,
+            data=_new_conversation_payload(conversation_id=conversation.pk, notebook_id=other.pk),
+        )
+
+    asyncio.run(_scenario())
+
+    conversation.refresh_from_db()
+    assert conversation.notebook == notebook
+
+
 @override_settings(REST_FRAMEWORK=throttle_settings(api_key_standard="1/hour"))
 def test_throttled_api_key_requests_get_429(db, user):
     cache.clear()
@@ -249,3 +393,132 @@ def test_throttled_api_key_requests_get_429(db, user):
     assert first.status_code == 200
     assert second.status_code == 429
     assert "Retry-After" in second.headers
+
+
+# --- Regenerate endpoint (spec #9) ------------------------------------------
+
+
+def regen_url(pk: int) -> str:
+    return f"/agent/chat/{pk}/regenerate/"
+
+
+def _regen_transaction(monkeypatch):
+    monkeypatch.setattr(loop_module, "default_client", fake_llm_script)
+
+
+def test_regenerate_replaces_answer_without_duplicating_user_row(
+    transactional_db, user, monkeypatch
+):
+    """The endpoint reuses the persisted user row: exactly one user row
+    stays, the stale answer is deleted, and the fresh answer is streamed
+    and persisted with the full lifecycle contract."""
+    _regen_transaction(monkeypatch)
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Why is yield low?"
+    )
+    stale = Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content="Stale answer."
+    )
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        response = await client.post(regen_url(conversation.pk))
+        body = b"".join([chunk async for chunk in response.streaming_content])
+        return response, parse_sse(body)
+
+    response, frames = asyncio.run(_scenario())
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "text/event-stream"
+    types = [t for t, _ in frames]
+    assert types[0] == "status"
+    assert types[-1] == "done"
+    assert "turn_saved" in types
+    # The user row was reused, never duplicated; the stale answer was replaced.
+    rows = list(conversation.messages.order_by("pk"))
+    assert [(m.role, m.content) for m in rows] == [
+        (Message.Role.USER, "Why is yield low?"),
+        (Message.Role.ASSISTANT, "Hello fab."),
+    ]
+    assert not Message.objects.filter(pk=stale.pk).exists()
+    # turn_saved points at the fresh answer (the new feedback hook).
+    saved = next(data for t, data in frames if t == "turn_saved")
+    assert saved["message_id"] == rows[1].pk
+
+
+def test_regenerate_deletes_the_stale_answer_s_feedback(transactional_db, user, monkeypatch):
+    """The old answer's verdict dies with the old answer: feedback on a
+    regenerated turn must not attach to the fresh answer it did not rate."""
+    _regen_transaction(monkeypatch)
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(conversation=conversation, role=Message.Role.USER, content="q")
+    stale = Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content="old"
+    )
+    MessageFeedback.objects.create(message=stale, user=user, value=MessageFeedback.Value.UP)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    assert (asyncio.run(_scenario())).status_code == 200
+    assert MessageFeedback.objects.count() == 0
+
+
+def test_regenerate_empty_conversation_is_400(transactional_db, user):
+    conversation = Conversation.objects.create(user=user)
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "validation_error"
+
+
+def test_regenerate_when_last_row_is_user_is_400(transactional_db, user):
+    """A trailing user row means the last answer never landed (failed or
+    stopped turn): there is nothing to replace, so the endpoint says so."""
+    conversation = Conversation.objects.create(user=user)
+    Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="unanswered"
+    )
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(conversation.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 400
+    assert "regenerate" in response.json()["error"]
+
+
+def test_regenerate_is_user_scoped(transactional_db, user, monkeypatch):
+    other = User.objects.create_user(username="sse-other", password="x")
+    foreign = Conversation.objects.create(user=other)
+    Message.objects.create(conversation=foreign, role=Message.Role.USER, content="private")
+    client = AsyncClient()
+    client.force_login(user)
+
+    async def _scenario():
+        return await client.post(regen_url(foreign.pk))
+
+    response = asyncio.run(_scenario())
+
+    assert response.status_code == 404
+    assert foreign.messages.filter(role=Message.Role.USER).count() == 1
+
+
+def test_regenerate_requires_auth(db):
+    response = Client().post(regen_url(1))
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "authentication_required"

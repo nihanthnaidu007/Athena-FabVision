@@ -46,11 +46,58 @@ UserScopedManager = models.Manager.from_queryset(UserScopedQuerySet)
 CreatorScopedManager = models.Manager.from_queryset(CreatorScopedQuerySet)
 
 
+class Notebook(models.Model):
+    """A user-created grouping of knowledge-base documents and conversations.
+
+    Notebooks are a grouping layer, not a scope boundary: every notebook
+    belongs to one user and its members stay user-scoped through their
+    own ``user`` FK. Retrieval treats a notebook as a *narrowing* of the
+    existing user-scoped query (``rag.retrieval.retrieve`` with
+    ``notebook_id``), never as a new access path.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notebooks'
+    )
+    name = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = UserScopedManager()
+
+    class Meta:
+        ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'name'], name='unique_notebook_name_per_user'
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Conversation(models.Model):
+    """A chat thread; ``mode`` picks the agent's system preset."""
+
+    class Mode(models.TextChoices):
+        ASSISTANT = 'assistant'
+        TUTOR = 'tutor'
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='conversations'
     )
     title = models.CharField(max_length=200, blank=True, default='New conversation')
+    # The agent loop resolves this to a system preset at prompt assembly
+    # (agent/loop.py); the chat UI surfaces it as the composer toggle and
+    # sidebar badge.
+    mode = models.CharField(max_length=12, choices=Mode.choices, default=Mode.ASSISTANT)
+    # Notebook-scoped chats retrieve only from the notebook's documents;
+    # deleting the notebook unscopes the conversation (SET_NULL), it never
+    # deletes the conversation or its messages.
+    notebook = models.ForeignKey(
+        Notebook, on_delete=models.SET_NULL, null=True, blank=True, related_name='conversations'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -108,6 +155,11 @@ class Document(models.Model):
     file_type = models.CharField(max_length=32, blank=True, default='')
     file = models.FileField(upload_to='documents/%Y/%m/')
     sha256 = models.CharField(max_length=64, db_index=True)
+    # Which course notebook this document belongs to; None = whole-KB
+    # document. Deleting the notebook unassigns its documents (SET_NULL).
+    notebook = models.ForeignKey(
+        Notebook, on_delete=models.SET_NULL, null=True, blank=True, related_name='documents'
+    )
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     failure_reason = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -205,6 +257,10 @@ class UsageEvent(models.Model):
         API = 'api'
         VOICE = 'voice'
         TOOL = 'tool'
+        # Practice flashcard generation (v1.1 #6): one budgeted LLM call
+        # per generate action, metered here so the dashboard's spend
+        # breakdowns show it as its own line.
+        STUDY = 'study'
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='usage_events'
@@ -238,3 +294,40 @@ class UsageEvent(models.Model):
 
     def __str__(self):
         return f'{self.kind} event for user {self.user_id}'
+
+
+class MessageFeedback(models.Model):
+    """The user's rating of one assistant message (the per-message trust loop).
+
+    Unlike the Message/Chunk detail rows, feedback is authored data and
+    carries its own ``user`` FK. It is unique per (user, message): a
+    changed mind upserts the same row, so the dashboard's ratios always
+    reflect each user's current verdict -- never a click history.
+    """
+
+    class Value(models.TextChoices):
+        UP = 'up'
+        DOWN = 'down'
+
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='feedback')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='message_feedback'
+    )
+    value = models.CharField(max_length=4, choices=Value.choices)
+    note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = UserScopedManager()
+
+    class Meta:
+        ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['message', 'user'], name='unique_feedback_per_user_message'
+            )
+        ]
+        indexes = [models.Index(fields=['user', '-updated_at'])]
+
+    def __str__(self):
+        return f'{self.value} on message {self.message_id} by user {self.user_id}'

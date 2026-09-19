@@ -54,7 +54,7 @@ aiofiles==24.1.0
 aiohappyeyeballs>=2.5.0
 aiosignal>=1.4.0
 annotated-types==0.7.0
-anyio==4.6.2.post1
+anyio==4.14.2
 asgiref==3.8.1
 async-timeout==4.0.3
 attrs==24.2.0

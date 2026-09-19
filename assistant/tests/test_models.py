@@ -18,6 +18,7 @@ from assistant.models import (
     Conversation,
     Document,
     Message,
+    Notebook,
     UsageEvent,
     hash_raw_key,
 )
@@ -69,6 +70,7 @@ class ModelDefaultsTests(TestCase):
     def test_conversation_defaults(self):
         conversation = Conversation.objects.create(user=self.user)
         self.assertEqual(conversation.title, 'New conversation')
+        self.assertEqual(conversation.mode, Conversation.Mode.ASSISTANT)
         self.assertEqual(
             list(self.user.conversations.all()), [conversation]
         )
@@ -256,3 +258,54 @@ class MessageIsolationTests(TestCase):
         self.assertFalse(
             Message.objects.filter(conversation__user=user_a, pk=b_message.pk).exists()
         )
+
+
+class NotebookModelTests(TestCase):
+    """Notebook grouping: per-user uniqueness, isolation, and SET_NULL membership."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user('alice')
+        self.user_b = User.objects.create_user('bob')
+
+    def test_name_is_unique_per_user_not_globally(self):
+        Notebook.objects.create(user=self.user_a, name='Lithography')
+        Notebook.objects.create(user=self.user_b, name='Lithography')  # fine: other user
+        with self.assertRaises(IntegrityError):
+            Notebook.objects.create(user=self.user_a, name='Lithography')
+
+    def test_isolation_user_a_cannot_read_user_b_notebooks(self):
+        b_notebook = Notebook.objects.create(user=self.user_b, name='Bob notes')
+        self.assertFalse(Notebook.objects.for_user(self.user_a).filter(pk=b_notebook.pk).exists())
+        self.assertFalse(self.user_a.notebooks.filter(pk=b_notebook.pk).exists())
+
+    def test_deleting_notebook_keeps_documents_but_unassigns_them(self):
+        notebook = Notebook.objects.create(user=self.user_a, name='Etch')
+        document = make_document(self.user_a, notebook=notebook)
+        self.assertEqual(document.notebook, notebook)
+
+        notebook.delete()
+
+        document.refresh_from_db()
+        self.assertIsNone(document.notebook)  # unassigned, never deleted
+        self.assertTrue(Document.objects.filter(pk=document.pk).exists())
+
+    def test_deleting_notebook_keeps_conversations_but_unscopes_them(self):
+        notebook = Notebook.objects.create(user=self.user_a, name='Etch')
+        conversation = Conversation.objects.create(user=self.user_a, notebook=notebook)
+        self.assertEqual(conversation.notebook, notebook)
+
+        notebook.delete()
+
+        conversation.refresh_from_db()
+        self.assertIsNone(conversation.notebook)
+        self.assertTrue(Conversation.objects.filter(pk=conversation.pk).exists())
+
+    def test_related_managers_group_members(self):
+        notebook = Notebook.objects.create(user=self.user_a, name='Lithography')
+        document = make_document(self.user_a, notebook=notebook)
+        conversation = Conversation.objects.create(user=self.user_a, notebook=notebook)
+
+        self.assertEqual(notebook.documents.count(), 1)
+        self.assertEqual(notebook.documents.first(), document)
+        self.assertEqual(notebook.conversations.count(), 1)
+        self.assertEqual(notebook.conversations.first(), conversation)

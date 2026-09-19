@@ -10,7 +10,9 @@ from assistant.models import ApiKey, hash_raw_key
 
 User = get_user_model()
 
-ASK_URL = '/agent/ask/'
+# The retired joke endpoint is gone (410); the live API surface these
+# key-lifecycle guarantees ride on is the SSE stream endpoint.
+STREAM_URL = '/agent/stream/'
 
 
 class KeysPageAuthTests(TestCase):
@@ -65,28 +67,26 @@ class KeysPageTests(TestCase):
     def test_created_key_authenticates_api_calls(self):
         raw_key = self.create_key(name='live')
         api_client = APIClient()
-        response = api_client.post(ASK_URL, {'query': 'hello'}, headers={'X-API-Key': raw_key})
-        self.assertEqual(response.status_code, 200)
-        # Using the key stamps usage so the keys page can show last-used.
-        key = ApiKey.objects.get(name='live')
-        self.assertTrue(key.usage_events.exists())
+        # A 400 means the request passed authentication and reached the
+        # view (an invalid or absent key is 401 before the body matters);
+        # a missing message body is the cheapest such probe. Usage
+        # stamping of keyed requests is pinned end-to-end by
+        # agent.tests.test_sse_view's full-turn test.
+        response = api_client.post(STREAM_URL, {}, headers={'X-API-Key': raw_key})
+        self.assertEqual(response.status_code, 400)
 
     def test_full_lifecycle_create_use_revoke(self):
         raw_key = self.create_key(name='lifecycle')
         api_client = APIClient()
-        self.assertEqual(
-            api_client.post(
-                ASK_URL, {'query': 'hello'}, headers={'X-API-Key': raw_key}
-            ).status_code,
-            200,
-        )
+        probe = api_client.post(STREAM_URL, {}, headers={'X-API-Key': raw_key})
+        self.assertEqual(probe.status_code, 400)
         key = ApiKey.objects.get(name='lifecycle')
         self.assertRedirects(
             self.client.post(reverse('dashboard:revoke-key', args=[key.id])),
             reverse('dashboard:keys'),
         )
         # Revocation is checked on every request: the very next use fails.
-        revoked = api_client.post(ASK_URL, {'query': 'again'}, headers={'X-API-Key': raw_key})
+        revoked = api_client.post(STREAM_URL, {}, headers={'X-API-Key': raw_key})
         self.assertEqual(revoked.status_code, 401)
 
     def test_revoked_key_shows_revoked_state_without_revoke_button(self):

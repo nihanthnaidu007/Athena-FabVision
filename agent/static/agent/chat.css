@@ -415,7 +415,95 @@ body {
 
 .bin-table { max-width: 320px; }
 
+/* die-grid heat map (wafer_map blocks that carry the dies payload) */
+
+.wafer-body {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 14px;
+}
+
+.wafer-body .wafer-grid { flex: 1 1 220px; margin: 0; }
+
+.wafer-map-figure { margin: 0; flex: 0 0 auto; }
+
+.wafer-map-svg {
+    display: block;
+    width: 100%;
+    max-width: 240px;
+    height: auto;
+    background: #fbfcfe;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+}
+
+.wafer-legend {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 5px;
+    font-size: 11.5px;
+    color: var(--muted);
+}
+
+.wafer-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: -1px;
+}
+
+.wafer-map-note { margin-top: 4px; font-size: 11.5px; color: #7a5c00; }
+
 .wafer-issues { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+
+/* spc_chart control-chart card */
+
+.spc-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+    margin: 6px 0 8px;
+}
+
+@media (max-width: 640px) { .spc-grid { grid-template-columns: repeat(3, 1fr); } }
+
+.spc-stat {
+    background: #f2f5f8;
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    padding: 7px 10px;
+    text-align: center;
+}
+
+.spc-stat-value { font-size: 16px; font-weight: 700; color: var(--ink); }
+.spc-stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
+.spc-chart { width: 100%; height: auto; display: block; margin: 4px 0 8px; }
+
+.spc-chart-line { stroke: var(--accent); stroke-width: 1.6; }
+
+.spc-chart-point { fill: var(--accent); }
+.spc-chart-point.flagged { fill: var(--danger); stroke: #ffffff; stroke-width: 1.4; }
+
+.spc-chart-limit { stroke: var(--danger); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.spc-chart-center { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }
+
+.spc-chart-guide-label { font-size: 11px; fill: var(--muted); }
+.spc-chart-axis-label { font-size: 11px; fill: var(--muted); }
+
+.spc-violations { margin: 6px 0; padding-left: 18px; }
+.spc-violations li { margin-bottom: 6px; }
+.spc-violation-label { font-size: 13px; font-weight: 600; color: #922f2b; }
+.spc-violation-detail { font-size: 12.5px; color: var(--muted); }
+
+.spc-issues { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+
+.spc-references { margin-top: 8px; border-top: 1px solid var(--edge); padding-top: 6px; }
+.spc-reference { font-size: 11.5px; color: var(--muted); }
 
 /* ----- turn footers and alerts ----- */
 
@@ -472,6 +560,25 @@ body {
 .upload-status.upload-error { border-color: #f0b9b7; background: #fdf1f0; }
 .upload-status.upload-error .upload-state { color: #922f2b; }
 
+/* One-click handoff from a stored wafer CSV to the analyzer (feature 2). */
+.upload-analyze-btn {
+    margin-top: 6px;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: var(--accent);
+    color: #ffffff;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.upload-analyze-btn:hover {
+    background: var(--accent-dark);
+    border-color: var(--accent-dark);
+}
+
+.upload-analyze-btn:disabled { opacity: 0.55; cursor: default; }
+
 #composer-form {
     display: flex;
     align-items: flex-end;
@@ -523,6 +630,147 @@ body {
 
 .stop-btn { background: var(--danger); }
 .stop-btn:hover { background: #b52b27; }
+
+/* ----- tutor mode (composer toggle + sidebar badge) ----- */
+
+.composer-tools {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.tutor-toggle {
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    padding: 4px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.tutor-toggle:hover { background: #f2f5f8; }
+
+.tutor-toggle.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+}
+
+.tutor-toggle:disabled { opacity: 0.55; cursor: default; }
+
+.mode-status { color: var(--danger); font-size: 12.5px; }
+
+.mode-badge {
+    flex-shrink: 0;
+    border-radius: 999px;
+    background: rgba(0, 123, 255, 0.22);
+    color: #9ec5fe;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+}
+
+/* ----- per-message feedback (thumbs on assistant messages) ----- */
+
+.feedback {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    /* Faint until the message is hovered, so the thread stays quiet;
+       a recorded verdict keeps its controls fully visible. */
+    opacity: 0.45;
+    transition: opacity 0.15s ease;
+}
+
+.message:hover > .feedback, .feedback.has-value { opacity: 1; }
+
+.feedback-btn {
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    padding: 1px 9px;
+    font-size: 12.5px;
+    line-height: 1.6;
+    cursor: pointer;
+}
+
+.feedback-btn:hover { background: #f2f5f8; }
+
+.feedback-btn.on {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.feedback-status { color: var(--danger); font-size: 12px; }
+
+.notebook-badge {
+    flex-shrink: 0;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border-radius: 999px;
+    background: rgba(18, 183, 106, 0.18);
+    color: #7fe0ae;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+}
+
+.notebook-select {
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12.5px;
+    padding: 4px 8px;
+    max-width: 220px;
+}
+
+.notebook-select:disabled { opacity: 0.55; cursor: default; }
+
+/* ----- conversation management (rename, export, regenerate, cap) ----- */
+
+.icon-btn.rename-btn { font-size: 13px; }
+.icon-btn.rename-btn:hover { color: var(--accent); }
+
+.rename-input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--edge);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 13.5px;
+    font-family: inherit;
+}
+
+.rename-input.rename-error { border-color: var(--danger); }
+
+.sidebar-cap {
+    padding: 8px 10px;
+    line-height: 1.4;
+}
+
+.composer-tool-btn {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--edge);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--muted);
+    padding: 4px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.composer-tool-btn:hover { background: #f2f5f8; }
+.composer-tool-btn:disabled { opacity: 0.55; cursor: default; }
+
+.export-link { color: var(--muted); }
 
 /* ----- narrow screens ----- */
 

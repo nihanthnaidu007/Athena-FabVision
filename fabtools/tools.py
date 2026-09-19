@@ -3,7 +3,7 @@
 ``TOOLS`` is a list of ``[name, fn, availability_fn]`` entries. Every ``fn``
 is an async callable ``(user, **kwargs)`` returning a block dict
 ``{type, title, ...}`` where ``type`` is one of ``table | text | wafer_map |
-error``. ``availability_fn`` is a zero-argument predicate consumed before
+spc_chart | error``. ``availability_fn`` is a zero-argument predicate consumed before
 the tool is offered to the model — it must never raise. Consumers import
 this module defensively (try/except ImportError) and feature-gate on the
 availability functions, so the five parallel PRs may merge in any order.
@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from fabtools import excursion, wafer_map
+from fabtools import excursion, spc, wafer_map
 from fabtools.search import WebSearchClient, default_web_search_client
 
 ToolFn = Callable[..., Awaitable[dict[str, Any]]]
@@ -51,6 +51,59 @@ def _load_retrieve() -> Callable[..., Any] | None:
             _rag_retrieve = _retrieve
         _rag_loaded = True
     return _rag_retrieve
+
+
+# Lazy, cached lookup of the Django Document model (None outside Django).
+# Uploaded CSVs are knowledge-base documents; the analyzer resolves their
+# storage names through the requesting user's own rows, never through raw
+# path arithmetic. Module-level so tests can inject a fake by setting
+# fabtools.tools._document_model and marking _document_loaded = True.
+_document_loaded = False
+_document_model: Any | None = None
+
+
+def _load_document_model() -> Any:
+    global _document_loaded, _document_model
+    if not _document_loaded:
+        try:
+            from django.apps import apps
+
+            _document_model = apps.get_model('assistant', 'Document')
+        except Exception:  # Django missing or apps not ready: stay standalone
+            _document_model = None
+        _document_loaded = True
+    return _document_model
+
+
+def _owned_document_path_sync(user: Any, path: str) -> str | None:
+    """Local file path for a KB storage name, strictly owned by ``user``.
+
+    A relative ``path`` must match a Document row belonging to the
+    requesting user, so one user can never point the analyzer at another
+    user's upload or at arbitrary server paths -- unmatched names touch
+    no filesystem at all. Returns None when Django is unavailable or
+    nothing user-owned matches.
+    """
+    document_model = _load_document_model()
+    if document_model is None or user is None:
+        return None
+    try:
+        document = document_model.objects.for_user(user).filter(file=path).first()
+    except Exception:
+        return None
+    if document is None:
+        return None
+    try:
+        return document.file.path
+    except (OSError, NotImplementedError, ValueError):  # no local file (remote storage)
+        return None
+
+
+async def _resolve_owned_path(user: Any, path: str) -> str | None:
+    """Async wrapper: the owned path lookup runs off the event loop."""
+    from asgiref.sync import sync_to_async
+
+    return await sync_to_async(_owned_document_path_sync)(user, path)
 
 
 def _always_available() -> bool:
@@ -82,15 +135,31 @@ async def wafer_map_analyze(
 ) -> Block:
     """Analyze a wafer-bin CSV (columns wafer_id,x,y,bin) into a wafer_map block.
 
-    Accepts the CSV text directly (``csv_content``) or a filesystem path to a
-    previously uploaded CSV (``path``). Never raises: malformed input returns
-    the structured error block.
+    Accepts the CSV text directly (``csv_content``) or a file reference
+    (``path``): either a knowledge-base storage name -- a CSV uploaded by
+    *this* user, resolved strictly through their own documents -- or an
+    absolute filesystem path. Never raises: malformed input returns the
+    structured error block.
     """
     if isinstance(csv_content, str) and csv_content.strip():
         return wafer_map.analyze_wafer_csv(csv_content)
     if path is not None:
+        resolved = Path(path)
+        if not resolved.is_absolute():
+            # A relative name is a knowledge-base storage name: resolve it
+            # through the requesting user's own documents (the lookup runs
+            # off the event loop), never the raw filesystem.
+            owned = await _resolve_owned_path(user, path)
+            if owned is None:
+                return wafer_map.error_block(
+                    f'no wafer CSV named {path!r} in this user\'s knowledge base; '
+                    'upload the CSV (paper-clip button or POST /kb/documents/) '
+                    'and analyze it from its file_path',
+                    code='wafer_csv_not_found',
+                )
+            resolved = Path(owned)
         try:
-            content = Path(path).read_text(encoding='utf-8', errors='replace')
+            content = resolved.read_text(encoding='utf-8', errors='replace')
         except OSError as exc:
             return wafer_map.error_block(
                 f'could not read the wafer CSV at {path!r}: {exc}',
@@ -126,6 +195,35 @@ async def excursion_triage(
             f'lot metrics must be a mapping of names to numbers, got {type(metrics).__name__}'
         )
     return excursion.triage_lot(metrics)
+
+
+async def spc_rules_check(
+    user: Any,
+    *,
+    series: Any = None,
+    sigma: Any = None,
+    **kwargs: Any,
+) -> Block:
+    """Check a measurement series against control limits and the Nelson rules.
+
+    ``series`` is the measurement text (CSV/JSON, 2-1000 numbers) or an
+    already-parsed list; ``sigma`` is the optional known process sigma.
+    Deterministic and always available. The model is not guided by a
+    parameter schema, so a few common argument names are tolerated before
+    declaring the input missing. Never raises: invalid input returns the
+    structured error block.
+    """
+    if series is None:
+        for alias in ('values', 'measurements', 'data', 'series_text'):
+            if kwargs.get(alias) is not None:
+                series = kwargs[alias]
+                break
+    if series is None:
+        return spc.error_block(
+            'no measurement series provided: pass series (CSV or JSON numbers, '
+            '2-1000 points) and optionally sigma (the known process sigma)'
+        )
+    return spc.check_series(series, sigma)
 
 
 async def kb_search(
@@ -261,9 +359,42 @@ async def web_search(
     }
 
 
+# LLM-facing schemas for tools whose arguments the model must name exactly.
+# The registry loader merges these in additively -- a tool without an entry
+# keeps the generic schema, so TOOLS stays a list of [name, fn, availability].
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    'wafer_map_analyze': {
+        'description': (
+            'Analyze a wafer-bin CSV (columns wafer_id,x,y,bin) and return die, '
+            'yield, and spatial-pattern statistics as a wafer_map block. Pass '
+            'csv_content (the CSV text) or path (the file_path of a CSV document '
+            'in the user\'s knowledge base, from an upload response).'
+        ),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'csv_content': {
+                    'type': 'string',
+                    'description': 'The wafer-bin CSV text itself.',
+                },
+                'path': {
+                    'type': 'string',
+                    'description': (
+                        'The file_path of a CSV document the user uploaded to '
+                        'their knowledge base, e.g. '
+                        '"documents/2026/09/18/wafer.csv".'
+                    ),
+                },
+            },
+        },
+    },
+}
+
+
 TOOLS: list[tuple[str, ToolFn, AvailabilityFn]] = [
     ('wafer_map_analyze', wafer_map_analyze, _always_available),
     ('excursion_triage', excursion_triage, _always_available),
+    ('spc_rules_check', spc_rules_check, _always_available),
     ('kb_search', kb_search, kb_search_available),
     ('web_search', web_search, web_search_available),
 ]

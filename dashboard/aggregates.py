@@ -13,6 +13,12 @@ from django.utils import timezone
 DEFAULT_RANGE = 7
 ALLOWED_RANGES = (7, 30)
 
+#: UsageEvent fields the dashboard breaks spend down by (spec #12).
+# Dashboard section keys are display names; ``tool_name`` is the UsageEvent
+# column the ``tool`` section reads from. The template renders "By tool".
+BREAKDOWN_FIELDS = ('kind', 'model', 'tool')
+_FIELD_ATTRS = {'kind': 'kind', 'model': 'model', 'tool': 'tool_name'}
+
 
 def parse_days(raw: str | None, allowed: tuple[int, ...] = ALLOWED_RANGES) -> int:
     """Return the selected window size; anything invalid falls back to the default.
@@ -97,6 +103,102 @@ def usage_summary(events, *, days: int, now) -> dict:
         'avg_latency_ms': round(sum(latencies) / len(latencies)) if latencies else 0,
         'p95_latency_ms': p95(latencies),
         'daily': daily,
+    }
+
+
+def breakdowns(events, *, days: int, now) -> dict[str, list[dict]]:
+    """Group in-window events by ``kind``, ``model``, and ``tool_name``.
+
+    Each breakdown is a list of ``{label, calls, tokens_in, tokens_out}``
+    rows sorted by calls (descending, then label for determinism). Events
+    with an empty field value group under ``unspecified`` -- the dashboard
+    shows unattributed spend rather than hiding it.
+    """
+    end_date = timezone.localdate(now)
+    start_date = end_date - timedelta(days=days - 1)
+    grouped: dict[str, dict[str, dict[str, int]]] = {name: {} for name in BREAKDOWN_FIELDS}
+    for event in events:
+        day = timezone.localdate(event.created_at)
+        if not start_date <= day <= end_date:
+            continue
+        for name in BREAKDOWN_FIELDS:
+            label = str(getattr(event, _FIELD_ATTRS[name], '') or 'unspecified')
+            bucket = grouped[name].setdefault(
+                label, {'calls': 0, 'tokens_in': 0, 'tokens_out': 0}
+            )
+            bucket['calls'] += 1
+            bucket['tokens_in'] += event.tokens_in
+            bucket['tokens_out'] += event.tokens_out
+    return {
+        name: [
+            {'label': label, **totals}
+            for label, totals in sorted(
+                rows.items(), key=lambda item: (-item[1]['calls'], item[0])
+            )
+        ]
+        for name, rows in grouped.items()
+    }
+
+
+def _ratio_rows(store: dict[str, dict[str, int]]) -> list[dict]:
+    """Bucket map -> label rows sorted by volume, then label; ``up_ratio`` in percent."""
+    rows = []
+    for label, counts in sorted(
+        store.items(), key=lambda item: (-(item[1]['ups'] + item[1]['downs']), item[0])
+    ):
+        total = counts['ups'] + counts['downs']
+        rows.append(
+            {
+                'label': label,
+                'ups': counts['ups'],
+                'downs': counts['downs'],
+                'total': total,
+                'up_ratio': round(100 * counts['ups'] / total) if total else None,
+            }
+        )
+    return rows
+
+
+def feedback_summary(feedbacks) -> dict:
+    """Aggregate per-message feedback rows into the dashboard's ratio shape.
+
+    ``feedbacks`` are MessageFeedback-like rows with ``value`` and a loaded
+    ``message`` (whose ``conversation`` and ``sources`` are populated).
+    Returns totals plus per-conversation and per-tool rows sorted by
+    volume, then label. Tools are attributed through each message's tool
+    sources, so a thumbs-up on an answer that ran the wafer analyzer
+    counts for it; answers without tool sources feed the conversation
+    rows only.
+    """
+    totals = {'ups': 0, 'downs': 0}
+    conversations: dict[str, dict[str, int]] = {}
+    tools: dict[str, dict[str, int]] = {}
+
+    def bucket(store: dict[str, dict[str, int]], label: str) -> dict[str, int]:
+        return store.setdefault(label, {'ups': 0, 'downs': 0})
+
+    for feedback in feedbacks:
+        message = feedback.message
+        key = 'ups' if feedback.value == 'up' else 'downs'
+        totals[key] += 1
+        conversation = getattr(message, 'conversation', None)
+        title = str(getattr(conversation, 'title', '') or 'Untitled conversation')
+        bucket(conversations, title)[key] += 1
+        for source in getattr(message, 'sources', None) or []:
+            if not isinstance(source, dict) or source.get('kind') != 'tool':
+                continue
+            tool = str(source.get('tool') or '')
+            if tool:
+                bucket(tools, tool)[key] += 1
+
+    total = totals['ups'] + totals['downs']
+    return {
+        'total': total,
+        'ups': totals['ups'],
+        'downs': totals['downs'],
+        'up_ratio': round(100 * totals['ups'] / total) if total else None,
+        'conversations': _ratio_rows(conversations),
+        'tools': _ratio_rows(tools),
     }
 
 

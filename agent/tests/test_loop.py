@@ -15,9 +15,14 @@ import pytest
 from django.contrib.auth.models import User
 
 from agent import loop as loop_module
-from agent.loop import SYSTEM_PROMPT, run_agent
+from agent.loop import (
+    SYSTEM_PROMPT,
+    TUTOR_SYSTEM_PROMPT,
+    resolve_system_prompt,
+    run_agent,
+)
 from agent.registry import ToolRegistry
-from assistant.models import Conversation, Message, UsageEvent
+from assistant.models import Chunk, Conversation, Document, Message, UsageEvent
 
 from .fakes import FakeLLM, async_test, delta, echo_tool, failing_tool, tool_call, usage
 
@@ -87,6 +92,7 @@ async def test_event_sequence_with_tool_round_trip(db, user, conversation):
         "status",
         "delta",
         "sources",
+        "turn_saved",
         "done",
     ]
     assert [e.data["stage"] for e in events if e.type == "status"] == [
@@ -106,6 +112,9 @@ async def test_event_sequence_with_tool_round_trip(db, user, conversation):
     assert tool_result_event.data["name"] == "echo_tool"
     assert tool_result_event.data["block"]["type"] == "text"
     assert tool_result_event.data["block"]["summary"] == "echo:LOT-7"
+    # The result pairs with its call, so the client replaces the right
+    # card even when one turn calls the same tool twice.
+    assert tool_result_event.data["call_id"] == "call_9"
     sources_event = next(e for e in events if e.type == "sources")
     assert sources_event.data["sources"] == [
         {"kind": "tool", "tool": "echo_tool", "summary": "echo:LOT-7"},
@@ -194,7 +203,7 @@ def test_usage_recorded_with_tokens_latency_and_fks(transactional_db, user, conv
 def test_retrieval_sources_flow_to_event_and_persisted_message(
     transactional_db, user, conversation
 ):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -235,7 +244,7 @@ def test_retrieval_sources_flow_to_event_and_persisted_message(
 
 @async_test
 async def test_async_retrieval_source_supported(db, user, conversation):
-    async def retrieve(user, query, k=5):
+    async def retrieve(user, query, k=5, notebook_id=None):
         return [
             {"document_id": 1, "chunk_id": 2, "title": "Async doc", "snippet": "s", "score": 0.5}
         ]
@@ -247,7 +256,7 @@ async def test_async_retrieval_source_supported(db, user, conversation):
 
 @async_test
 async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
-    def retrieve(user, query, k=5):
+    def retrieve(user, query, k=5, notebook_id=None):
         return [
             {
                 "document_id": 3,
@@ -282,7 +291,7 @@ async def test_retrieval_context_reaches_model_prompt(db, user, conversation):
 
 @async_test
 async def test_retrieval_failure_degrades_to_empty_context(db, user, conversation):
-    def broken_retrieve(user, query, k=5):
+    def broken_retrieve(user, query, k=5, notebook_id=None):
         raise RuntimeError("embedding service down")
 
     events = await run_turn(
@@ -292,8 +301,85 @@ async def test_retrieval_failure_degrades_to_empty_context(db, user, conversatio
         retrieve=broken_retrieve,
     )
 
-    assert event_types(events)[-2:] == ["sources", "done"]
+    assert event_types(events)[-3:] == ["sources", "turn_saved", "done"]
     assert next(e for e in events if e.type == "sources").data["sources"] == []
+
+
+@async_test
+async def test_notebook_id_is_forwarded_to_retrieval_source(db, user, conversation):
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn(
+        [[delta("ok."), usage()]], user, conversation, retrieve=retrieve, notebook_id=17
+    )
+
+    assert captured["notebook_id"] == 17
+
+
+@async_test
+async def test_retrieval_without_notebook_receives_none_whole_kb(db, user, conversation):
+    """Regression pin: an unscoped turn retrieves exactly as before v1.1."""
+    captured = {}
+
+    def retrieve(user, query, k=5, notebook_id=None):
+        captured["notebook_id"] = notebook_id
+        return []
+
+    await run_turn([[delta("ok."), usage()]], user, conversation, retrieve=retrieve)
+
+    assert captured["notebook_id"] is None
+
+
+def test_sync_retrieval_source_runs_offloaded_from_the_event_loop(
+    transactional_db, user, conversation, monkeypatch
+):
+    """Regression: the wired sync retrieve must run off the event loop.
+
+    The registry wires the plain sync ``rag.retrieval.retrieve``; called
+    inline inside the loop it raised SynchronousOnlyOperation under ASGI,
+    which the loop swallowed -- every streamed answer degraded to "no
+    document context" in the browser. The real sync source must be
+    off-loaded to a thread and its sources surfaced.
+    """
+    from rag import retrieval as rag_retrieval
+    from rag.tests.fakes import FakeEmbedder
+
+    document = Document.objects.create(
+        user=user,
+        original_filename='runbook.txt',
+        file_type='txt',
+        sha256='0' * 64,
+        status=Document.Status.READY,
+    )
+    embedder = FakeEmbedder()
+    Chunk.objects.create(
+        document=document,
+        index=0,
+        content='wafer yield summary',
+        content_hash='chunk-0',
+        embedding=embedder.embed(['wafer yield summary'])[0],
+    )
+    monkeypatch.setattr(rag_retrieval, 'default_embedder', lambda: embedder)
+
+    async def _scenario():
+        return await run_turn(
+            [[delta("Cited answer."), usage()]],
+            user,
+            conversation,
+            retrieve=rag_retrieval.retrieve,
+            user_input='wafer',
+        )
+
+    events = asyncio.run(_scenario())
+
+    sources_event = next(e for e in events if e.type == "sources")
+    assert [source["title"] for source in sources_event.data["sources"]] == ["runbook.txt"]
+    assistant = conversation.messages.get(role=Message.Role.ASSISTANT)
+    assert len(assistant.sources) == 1
 
 
 def test_history_is_sent_oldest_first_before_new_turn(transactional_db, user, conversation):
@@ -457,3 +543,187 @@ def test_abort_preserves_partial_text(transactional_db, user, conversation):
 def test_system_prompt_is_fab_domain_grounded():
     assert "semiconductor" in SYSTEM_PROMPT
     assert "cite" in SYSTEM_PROMPT
+
+
+def test_tutor_preset_tutors_and_keeps_grounding():
+    assert "semiconductor" in TUTOR_SYSTEM_PROMPT
+    assert "cite" in TUTOR_SYSTEM_PROMPT
+    assert "Never give the final answer" in TUTOR_SYSTEM_PROMPT
+    assert "guiding" in TUTOR_SYSTEM_PROMPT
+
+
+def test_resolve_system_prompt_swaps_only_for_tutor_mode():
+    assert resolve_system_prompt(Conversation.Mode.ASSISTANT) is SYSTEM_PROMPT
+    assert resolve_system_prompt(Conversation.Mode.TUTOR) is TUTOR_SYSTEM_PROMPT
+    # Unknown or blank values degrade to the default assistant behavior.
+    assert resolve_system_prompt("") is SYSTEM_PROMPT
+    assert resolve_system_prompt("garbage") is SYSTEM_PROMPT
+
+
+@async_test
+async def test_tutor_conversation_builds_prompt_from_tutor_preset(db, user, conversation):
+    conversation.mode = Conversation.Mode.TUTOR
+    fake = FakeLLM([[delta("Hint: compare the edge dies first."), usage()]])
+
+    async def _collect():
+        _ = [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input="Why is yield low?",
+                llm=fake,
+                registry=make_registry(),
+            )
+        ]
+
+    await _collect()
+
+    prompt_messages = fake.calls[0]["messages"]
+    assert prompt_messages[0]["role"] == "system"
+    assert prompt_messages[0]["content"] == TUTOR_SYSTEM_PROMPT
+    assert prompt_messages[0]["content"] != SYSTEM_PROMPT
+
+
+@async_test
+async def test_assistant_conversation_keeps_default_preset(db, user, conversation):
+    fake = FakeLLM([[delta("Answer."), usage()]])
+
+    async def _collect():
+        _ = [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input="Why is yield low?",
+                llm=fake,
+                registry=make_registry(),
+            )
+        ]
+
+    await _collect()
+
+    assert fake.calls[0]["messages"][0]["content"] == SYSTEM_PROMPT
+
+
+def test_tutor_turn_persists_like_any_turn(transactional_db, user, conversation):
+    """Tutor mode swaps the preset, not the loop contract."""
+    conversation.mode = Conversation.Mode.TUTOR
+
+    asyncio.run(run_turn([[delta("Hint: check the edge ring."), usage()]], user, conversation))
+
+    contents = list(conversation.messages.values_list("role", "content"))
+    assert contents == [
+        ("user", "Analyze wafer w1"),
+        ("assistant", "Hint: check the edge ring."),
+    ]
+    assert UsageEvent.objects.count() == 1
+
+
+def test_turn_saved_event_carries_assistant_message_id(user, conversation):
+    """The turn_saved event exposes the persisted assistant pk (feedback hook)."""
+
+    async def _scenario():
+        return await run_turn([[delta("Hello.")]], user, conversation)
+
+    events = asyncio.run(_scenario())
+
+    saved = [event for event in events if event.type == "turn_saved"]
+    assert len(saved) == 1
+    assistant = conversation.messages.get(role=Message.Role.ASSISTANT)
+    assert saved[0].data["message_id"] == assistant.pk
+    # done still terminates the stream, after the save notice.
+    assert event_types(events)[-1] == "done"
+
+
+def test_failed_turn_persists_partial_without_turn_saved(user, conversation):
+    """A turn that fails mid-stream keeps its partial answer but never
+    emits turn_saved: the client has no pk to hang feedback on, which is
+    honest -- there is no complete answer to rate."""
+
+    async def _scenario():
+        script = [[delta("Partial answer "), RuntimeError("boom")]]
+        return await run_turn(script, user, conversation)
+
+    events = asyncio.run(_scenario())
+
+    assert not [event for event in events if event.type == "turn_saved"]
+    assert conversation.messages.get(role=Message.Role.ASSISTANT).content == "Partial answer "
+
+
+# --- Regenerate path (spec #9): reuse the persisted user row -------------
+
+
+def add_turn(conversation, user_text, assistant_text):
+    Message.objects.create(conversation=conversation, role=Message.Role.USER, content=user_text)
+    return Message.objects.create(
+        conversation=conversation, role=Message.Role.ASSISTANT, content=assistant_text
+    )
+
+
+def test_regenerate_reuses_user_row_and_replaces_answer(transactional_db, user, conversation):
+    """Regenerating runs on the existing user message: no duplicate user
+    row, and the fresh answer is persisted after it. (The view deletes the
+    stale answer before the loop runs -- that is its contract, pinned in
+    test_sse_view.py.)"""
+    user_row = Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Why is yield low?"
+    )
+    fake = FakeLLM([[delta("Fresh answer."), usage()]])
+
+    async def _scenario():
+        return [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input=user_row.content,
+                llm=fake,
+                registry=make_registry(),
+                existing_user_message=user_row,
+            )
+        ]
+
+    events = asyncio.run(_scenario())
+
+    roles_and_contents = list(conversation.messages.values_list("role", "content"))
+    assert roles_and_contents == [("user", "Why is yield low?"), ("assistant", "Fresh answer.")]
+    # The status event still points at the reused user row.
+    started = next(event for event in events if event.type == "status")
+    assert started.data["message_id"] == user_row.pk
+    # And the model saw the reused user turn exactly once (appended after
+    # history by build_messages, not duplicated by a second persistence).
+    turn_messages = fake.calls[0]["messages"]
+    user_turns = [m for m in turn_messages if m["role"] == "user"]
+    assert user_turns == [{"role": "user", "content": "Why is yield low?"}]
+
+
+def test_regenerate_history_contains_prior_turns(transactional_db, user, conversation):
+    """The reused user row is excluded from history (build_messages appends
+    it explicitly), while earlier turns stay in context."""
+    add_turn(conversation, "First question?", "First answer.")
+    second_user = Message.objects.create(
+        conversation=conversation, role=Message.Role.USER, content="Second question?"
+    )
+    fake = FakeLLM([[delta("Regenerated second answer."), usage()]])
+
+    async def _scenario():
+        return [
+            event
+            async for event in run_agent(
+                user=user,
+                conversation=conversation,
+                user_input=second_user.content,
+                llm=fake,
+                registry=make_registry(),
+                existing_user_message=second_user,
+            )
+        ]
+
+    events = asyncio.run(_scenario())
+    assert event_types(events)[-1] == "done"
+
+    model_messages = fake.calls[0]["messages"]
+    texts = [m["content"] for m in model_messages if m["role"] in ("user", "assistant")]
+    # First turn is in context; the reused row is appended once, last.
+    assert texts == ["First question?", "First answer.", "Second question?"]

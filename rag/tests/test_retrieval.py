@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 
-from assistant.models import Chunk, Document
+from assistant.models import Chunk, Document, Notebook
 from rag import retrieval
 from rag.ingestion import ingest_document
 from rag.tests.fakes import FakeEmbedder
@@ -136,3 +136,92 @@ class RetrieveTests(TempMediaMixin, TestCase):
         results = retrieval.retrieve(self.alice, 'wafer', embedder=self.embedder)
 
         self.assertEqual(results, [])
+
+
+@override_settings(OPENAI_API_KEY=None)
+class NotebookScopedRetrieveTests(TempMediaMixin, TestCase):
+    """notebook_id narrows the user-scoped query; it can never widen it."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice = User.objects.create_user('alice')
+        self.bob = User.objects.create_user('bob')
+        self.embedder = FakeEmbedder()
+        self.litho = Notebook.objects.create(user=self.alice, name='Lithography')
+        self.etch = Notebook.objects.create(user=self.alice, name='Etch')
+
+    def ingest_for(self, user, content: bytes, filename: str, notebook=None) -> Document:
+        document = Document.objects.create(
+            user=user,
+            original_filename=filename,
+            file_type='txt',
+            sha256='0' * 64,
+            notebook=notebook,
+        )
+        document.file.save(filename, ContentFile(content), save=True)
+        result = ingest_document(document, embedder=self.embedder)
+        self.assertEqual(result.status, Document.Status.READY, result.detail)
+        return document
+
+    def test_scoped_query_retrieves_only_that_notebooks_documents(self):
+        in_scope = self.ingest_for(
+            self.alice, b'plasma etch notes', 'plasma.txt', notebook=self.litho
+        )
+        other = self.ingest_for(self.alice, b'plasma etch notes', 'etch.txt', self.etch)
+
+        results = retrieval.retrieve(
+            self.alice, 'plasma', notebook_id=self.litho.pk, embedder=self.embedder
+        )
+
+        self.assertEqual([item['document_id'] for item in results], [in_scope.pk])
+        self.assertNotIn(other.pk, [item['document_id'] for item in results])
+
+    def test_scoped_query_excludes_unassigned_documents(self):
+        self.ingest_for(self.alice, b'plasma etch notes', 'plasma.txt', self.litho)
+        unassigned = self.ingest_for(self.alice, b'plasma etch notes', 'loose.txt')
+
+        results = retrieval.retrieve(
+            self.alice, 'plasma', notebook_id=self.litho.pk, embedder=self.embedder
+        )
+
+        self.assertNotEqual(results, [])
+        self.assertNotIn(unassigned.pk, [item['document_id'] for item in results])
+
+    def test_notebook_isolation_never_returns_another_users_notebook_chunks(self):
+        # Bob's notebook with identical content and an identical name: a
+        # notebook-scoped query from Alice must never see it.
+        bob_notebook = Notebook.objects.create(user=self.bob, name='Plasma')
+        self.ingest_for(self.bob, b'plasma etch notes', 'bob-plasma.txt', bob_notebook)
+        self.ingest_for(self.alice, b'plasma etch notes', 'alice-plasma.txt', self.litho)
+
+        results = retrieval.retrieve(
+            self.alice, 'plasma', notebook_id=self.litho.pk, embedder=self.embedder
+        )
+
+        self.assertNotEqual(results, [])
+        self.assertEqual({item['title'] for item in results}, {'alice-plasma.txt'})
+
+    def test_foreign_notebook_id_retrieves_nothing(self):
+        # A user passing a notebook id they do not own gets an empty
+        # result, never the foreign notebook's documents.
+        bob_notebook = Notebook.objects.create(user=self.bob, name='Bob notes')
+        self.ingest_for(self.bob, b'plasma etch notes', 'bob-plasma.txt', bob_notebook)
+
+        results = retrieval.retrieve(
+            self.alice, 'plasma', notebook_id=bob_notebook.pk, embedder=self.embedder
+        )
+
+        self.assertEqual(results, [])
+
+    def test_none_notebook_id_keeps_whole_kb_behavior(self):
+        """Regression pin: notebook_id=None is exactly the unscoped query."""
+        in_notebook = self.ingest_for(
+            self.alice, b'plasma etch notes', 'plasma.txt', notebook=self.litho
+        )
+        unassigned = self.ingest_for(self.alice, b'plasma etch notes', 'loose.txt')
+
+        results = retrieval.retrieve(self.alice, 'plasma', embedder=self.embedder)
+
+        self.assertEqual(
+            {item['document_id'] for item in results}, {in_notebook.pk, unassigned.pk}
+        )

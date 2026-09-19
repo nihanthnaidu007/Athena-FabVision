@@ -31,6 +31,85 @@
 <div class="empty">No usage recorded in the selected window.</div>
 {% endif %}
 
+<h2>Breakdowns</h2>
+{% if summary.total_calls %}
+<div class="breakdowns">
+    {% for section_name, rows in breakdowns.items %}
+    <div class="breakdown">
+        <h3>By {{ section_name }}</h3>
+        <table>
+            <thead>
+                <tr><th>{{ section_name|title }}</th><th>Calls</th><th>Tokens in</th><th>Tokens out</th></tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.calls }}</td>
+                    <td>{{ row.tokens_in }}</td>
+                    <td>{{ row.tokens_out }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<h2>Answer feedback</h2>
+{% if feedback.total %}
+<div class="breakdowns">
+    <div class="breakdown">
+        <h3>Overall</h3>
+        <p>
+            {{ feedback.ups }} helpful · {{ feedback.downs }} not helpful
+            — {{ feedback.up_ratio }}% positive across {{ feedback.total }} rated answers.
+        </p>
+    </div>
+    <div class="breakdown">
+        <h3>By conversation</h3>
+        <table>
+            <thead>
+                <tr><th>Conversation</th><th>Helpful</th><th>Not helpful</th><th>Positive</th></tr>
+            </thead>
+            <tbody>
+            {% for row in feedback.conversations %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.ups }}</td>
+                    <td>{{ row.downs }}</td>
+                    <td>{{ row.up_ratio }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if feedback.tools %}
+    <div class="breakdown">
+        <h3>By tool</h3>
+        <table>
+            <thead>
+                <tr><th>Tool</th><th>Helpful</th><th>Not helpful</th><th>Positive</th></tr>
+            </thead>
+            <tbody>
+            {% for row in feedback.tools %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.ups }}</td>
+                    <td>{{ row.downs }}</td>
+                    <td>{{ row.up_ratio }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty">No answer feedback yet — thumbs on chat messages appear here.</div>
+{% endif %}
+
 <h2>Daily detail</h2>
 <table>
     <thead>

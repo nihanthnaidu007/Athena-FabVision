@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from assistant.models import UsageEvent
+from assistant.models import Conversation, Message, MessageFeedback, UsageEvent
 
 User = get_user_model()
 
@@ -124,7 +124,115 @@ class UsagePageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'No usage recorded in the selected window.')
         self.assertNotContains(response, '<svg class="chart"')
+        # Empty windows render no breakdown tables either.
+        self.assertNotContains(response, '<div class="breakdowns">')
         # With data, the inline SVG bar chart is rendered.
         self.client.force_login(self.alice)
         populated = self.client.get(reverse('dashboard:usage'))
         self.assertContains(populated, '<svg class="chart"')
+
+
+class UsageBreakdownPageTests(TestCase):
+    """The kind/model/tool breakdowns render real groups and stay user-scoped."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user('alice', password='pw12345')
+        cls.bob = User.objects.create_user('bob', password='pw12345')
+        now = timezone.now()
+        for kind, model, tool_name, tokens in [
+            ('chat', 'gpt-4o-mini', '', 100),
+            ('chat', 'gpt-4o-mini', '', 50),
+            ('tool', '', 'wafer_map_analyze', 30),
+            ('api', 'gpt-4o', '', 20),
+        ]:
+            event = UsageEvent.objects.create(
+                user=cls.alice,
+                kind=kind,
+                model=model,
+                tool_name=tool_name,
+                tokens_in=tokens,
+            )
+            UsageEvent.objects.filter(pk=event.pk).update(created_at=now)
+        bob_event = UsageEvent.objects.create(
+            user=cls.bob, kind=UsageEvent.Kind.VOICE, model='whisper', tokens_in=999
+        )
+        UsageEvent.objects.filter(pk=bob_event.pk).update(created_at=now)
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def test_breakdown_tables_render_grouped_rows(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertEqual(response.status_code, 200)
+        breakdowns = response.context['breakdowns']
+        self.assertEqual([row['label'] for row in breakdowns['kind']], ['chat', 'api', 'tool'])
+        self.assertEqual(breakdowns['kind'][0]['calls'], 2)
+        self.assertEqual(breakdowns['model'][0]['label'], 'gpt-4o-mini')
+        self.assertEqual(breakdowns['tool'][1]['label'], 'wafer_map_analyze')
+        page = response.content.decode()
+        self.assertIn('wafer_map_analyze', page)
+        self.assertIn('unspecified', page)  # tool events have no model stamp
+
+    def test_breakdowns_exclude_other_users_events(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertNotContains(response, 'whisper')  # bob's model never surfaces
+        breakdowns = response.context['breakdowns']
+        self.assertNotIn('voice', [row['label'] for row in breakdowns['kind']])
+
+
+class FeedbackRatioPageTests(TestCase):
+    """The answer-feedback section renders ratios for the viewing user only."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.alice = User.objects.create_user('alice', password='pw12345')
+        cls.bob = User.objects.create_user('bob', password='pw12345')
+        cls.conversation = Conversation.objects.create(user=cls.alice, title='Wafer questions')
+        message = Message.objects.create(
+            conversation=cls.conversation,
+            role=Message.Role.ASSISTANT,
+            content='The edge ring is failing.',
+            sources=[{'kind': 'tool', 'tool': 'wafer_map'}],
+        )
+        MessageFeedback.objects.create(message=message, user=cls.alice, value='up')
+        bob_conversation = Conversation.objects.create(
+            user=cls.bob, title="Bob's private thread"
+        )
+        bob_message = Message.objects.create(
+            conversation=bob_conversation,
+            role=Message.Role.ASSISTANT,
+            content='Bob asks.',
+            sources=[{'kind': 'tool', 'tool': 'kb_search'}],
+        )
+        MessageFeedback.objects.create(message=bob_message, user=cls.bob, value='down')
+
+    def setUp(self):
+        self.client.force_login(self.alice)
+
+    def test_section_renders_own_ratio_and_tool_attribution(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertEqual(response.status_code, 200)
+        feedback = response.context['feedback']
+        self.assertEqual(feedback['total'], 1)
+        self.assertEqual(feedback['ups'], 1)
+        self.assertEqual(feedback['up_ratio'], 100)
+        self.assertEqual(feedback['tools'][0]['label'], 'wafer_map')
+        page = response.content.decode()
+        self.assertIn('Wafer questions', page)
+        self.assertIn('wafer_map', page)
+
+    def test_other_users_feedback_is_excluded(self):
+        response = self.client.get(reverse('dashboard:usage'))
+        feedback = response.context['feedback']
+        self.assertEqual(
+            [row['label'] for row in feedback['conversations']], ['Wafer questions']
+        )
+        self.assertNotContains(response, "Bob&#x27;s private thread")
+        self.assertNotContains(response, 'kb_search')
+
+    def test_empty_feedback_shows_honest_empty_state(self):
+        carol = User.objects.create_user('carol', password='pw12345')
+        self.client.force_login(carol)
+        response = self.client.get(reverse('dashboard:usage'))
+        self.assertContains(response, 'No answer feedback yet')
